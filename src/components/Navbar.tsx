@@ -1,12 +1,26 @@
 'use client';
 
+import { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
 import { usePathname } from 'next/navigation';
-import { Sparkles } from 'lucide-react';
+import { Sparkles, Calendar } from 'lucide-react';
 
 export default function Navbar() {
   const pathname = usePathname();
+  const [hidden, setHidden] = useState(false);
+  const lastY = useRef(0);
+
+  useEffect(() => {
+    const onScroll = () => {
+      const y = window.scrollY;
+      // Hide if scrolling down and scrolled past threshold
+      setHidden(y > lastY.current && y > 120);
+      lastY.current = y;
+    };
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => window.removeEventListener('scroll', onScroll);
+  }, []);
 
   const links = [
     { name: 'Collections', href: '/collections' },
@@ -16,7 +30,9 @@ export default function Navbar() {
   ];
 
   return (
-    <header className="sticky top-0 left-0 right-0 z-50 bg-stone-950/65 backdrop-blur-lg border-b border-stone-900">
+    <header className={`sticky top-0 left-0 right-0 z-50 bg-stone-950/65 backdrop-blur-lg border-b border-stone-900 transition-transform duration-500 ${
+      hidden ? '-translate-y-full' : 'translate-y-0'
+    }`}>
       <div className="max-w-7xl mx-auto px-6 h-20 flex items-center justify-between">
         {/* Brand Logo */}
         <Link 

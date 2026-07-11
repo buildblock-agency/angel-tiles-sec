@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef, useState, useEffect } from 'react';
+import { useRef, useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
 import gsap from 'gsap';
@@ -9,17 +9,96 @@ import { ScrollTrigger } from 'gsap/ScrollTrigger';
 import { ArrowRight, Sparkles, Shield, Award, MapPin } from 'lucide-react';
 import Navbar from '@/components/Navbar';
 import Footer from '@/components/Footer';
+import Preloader from '@/components/Preloader';
 
 gsap.registerPlugin(ScrollTrigger);
 
 export default function HomeClient() {
   const mainRef = useRef<HTMLDivElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const heroSectionRef = useRef<HTMLDivElement>(null);
-  
-  const [loadProgress, setLoadProgress] = useState(0);
   const [isAssetsLoaded, setIsAssetsLoaded] = useState(false);
   const imagesRef = useRef<HTMLImageElement[]>([]);
+  const [preloaderFinished, setPreloaderFinished] = useState(false);
+
+  const handlePreloaderComplete = useCallback(() => {
+    setPreloaderFinished(true);
+  }, []);
+
+  useEffect(() => {
+    const visited = sessionStorage.getItem('hasVisited_angel');
+    if (visited) {
+      setPreloaderFinished(true);
+    }
+  }, []);
+
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const heroSectionRef = useRef<HTMLDivElement>(null);
+  const particleCanvasRef = useRef<HTMLCanvasElement>(null);
+  const [loadProgress, setLoadProgress] = useState(0);
+  const sliderRef = useRef<HTMLDivElement>(null);
+  const [sliderPos, setSliderPos] = useState(50);
+  const [isDragging, setIsDragging] = useState(false);
+
+  const handleSliderMove = (clientX: number) => {
+    if (!sliderRef.current) return;
+    const rect = sliderRef.current.getBoundingClientRect();
+    const x = clientX - rect.left;
+    const percentage = Math.max(0, Math.min(100, (x / rect.width) * 100));
+    setSliderPos(percentage);
+  };
+
+  const handleMouseDown = (e: React.MouseEvent) => {
+    setIsDragging(true);
+    handleSliderMove(e.clientX);
+  };
+
+  const handleTouchStart = (e: React.TouchEvent) => {
+    setIsDragging(true);
+    if (e.touches.length > 0) {
+      handleSliderMove(e.touches[0].clientX);
+    }
+  };
+
+  useEffect(() => {
+    if (!isDragging) return;
+
+    const onMove = (e: MouseEvent) => {
+      handleSliderMove(e.clientX);
+    };
+
+    const onUp = () => {
+      setIsDragging(false);
+    };
+
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+
+    return () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+  }, [isDragging]);
+
+  useEffect(() => {
+    if (!isDragging) return;
+
+    const onTouchMove = (e: TouchEvent) => {
+      if (e.touches.length > 0) {
+        handleSliderMove(e.touches[0].clientX);
+      }
+    };
+
+    const onTouchEnd = () => {
+      setIsDragging(false);
+    };
+
+    window.addEventListener('touchmove', onTouchMove, { passive: true });
+    window.addEventListener('touchend', onTouchEnd);
+
+    return () => {
+      window.removeEventListener('touchmove', onTouchMove);
+      window.removeEventListener('touchend', onTouchEnd);
+    };
+  }, [isDragging]);
 
   const totalFrames = 60;
 
@@ -27,6 +106,9 @@ export default function HomeClient() {
   useEffect(() => {
     let loadedCount = 0;
     const images: HTMLImageElement[] = [];
+
+    // Reset load progress on mount
+    setLoadProgress(0);
 
     for (let i = 1; i <= totalFrames; i++) {
       const img = new window.Image();
@@ -51,9 +133,104 @@ export default function HomeClient() {
     imagesRef.current = images;
   }, []);
 
+  // 1.5. Golden Particle Embers Animation Loop (runs when preloader finishes)
+  useEffect(() => {
+    if (!preloaderFinished) return;
+
+    const canvas = particleCanvasRef.current;
+    if (!canvas) return;
+
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    let animationFrameId: number;
+    let isTabActive = true;
+
+    const handleVisibilityChange = () => {
+      isTabActive = !document.hidden;
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    interface Particle {
+      x: number;
+      y: number;
+      size: number;
+      speedX: number;
+      speedY: number;
+      opacity: number;
+    }
+
+    let particles: Particle[] = [];
+    const particleCount = 100;
+
+    const resizeCanvas = () => {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+    };
+
+    window.addEventListener('resize', resizeCanvas);
+    resizeCanvas();
+
+    for (let i = 0; i < particleCount; i++) {
+      particles.push({
+        x: Math.random() * canvas.width,
+        y: Math.random() * canvas.height,
+        size: Math.random() * 2.5 + 0.8,
+        speedX: (Math.random() - 0.5) * 0.35,
+        speedY: -Math.random() * 0.5 - 0.15,
+        opacity: Math.random() * 0.6 + 0.1
+      });
+    }
+
+    const drawParticles = () => {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      const rect = canvas.getBoundingClientRect();
+      const isVisible = rect.bottom > 0 && rect.top < window.innerHeight;
+
+      if (!isVisible || !isTabActive) {
+        animationFrameId = requestAnimationFrame(drawParticles);
+        return;
+      }
+
+      particles.forEach((p) => {
+        p.x += p.speedX;
+        p.y += p.speedY;
+
+        if (p.y < -10) {
+          p.y = canvas.height + 10;
+          p.x = Math.random() * canvas.width;
+        }
+        if (p.x < -10) {
+          p.x = canvas.width + 10;
+        } else if (p.x > canvas.width + 10) {
+          p.x = -10;
+        }
+
+        ctx.beginPath();
+        const gradient = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, p.size);
+        gradient.addColorStop(0, `rgba(238, 216, 101, ${p.opacity})`);
+        gradient.addColorStop(1, `rgba(212, 159, 26, 0)`);
+        ctx.fillStyle = gradient;
+        ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+        ctx.fill();
+      });
+
+      animationFrameId = requestAnimationFrame(drawParticles);
+    };
+
+    drawParticles();
+
+    return () => {
+      cancelAnimationFrame(animationFrameId);
+      window.removeEventListener('resize', resizeCanvas);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [preloaderFinished]);
+
   // 2. Playback Frame Sequence on Scroll via GSAP
   useGSAP(() => {
-    if (!isAssetsLoaded || !canvasRef.current || !heroSectionRef.current) return;
+    if (!isAssetsLoaded || !preloaderFinished || !canvasRef.current || !heroSectionRef.current) return;
 
     const canvas = canvasRef.current;
     const ctx = canvas.getContext('2d');
@@ -134,28 +311,83 @@ export default function HomeClient() {
       }
     });
 
-    // Staggered Title Animations
-    gsap.fromTo('.hero-reveal-text', 
-      { opacity: 0, y: 50 },
+    // Fade out golden particle canvas on scroll
+    if (particleCanvasRef.current) {
+      gsap.to(particleCanvasRef.current, {
+        opacity: 0,
+        scrollTrigger: {
+          trigger: heroSectionRef.current,
+          start: 'top top',
+          end: 'top -200px',
+          scrub: true,
+        }
+      });
+    }
+
+    // Falling header slides from the right
+    gsap.fromTo('header',
+      { xPercent: 30, opacity: 0 },
       { 
+        xPercent: 0, 
         opacity: 1, 
-        y: 0, 
-        duration: 1.2, 
-        stagger: 0.2, 
-        ease: 'power3.out' 
+        duration: 1.6, 
+        delay: 0.05, 
+        ease: 'power4.out',
+        clearProps: 'transform'
       }
     );
 
-    // Staggered highlights entry
+    // Main content slides from the right
+    gsap.fromTo('.home-main-content',
+      { xPercent: 30, opacity: 0 },
+      { 
+        xPercent: 0, 
+        opacity: 1, 
+        duration: 1.6, 
+        delay: 0.05, 
+        ease: 'power4.out',
+        clearProps: 'transform',
+        onComplete: () => {
+          ScrollTrigger.refresh();
+        }
+      }
+    );
+
+    // Staggered Title Animations slide from the right
+    gsap.fromTo('.hero-reveal-text', 
+      { opacity: 0, x: 80 },
+      { 
+        opacity: 1, 
+        x: 0, 
+        duration: 1.4, 
+        delay: 0.2,
+        stagger: 0.1, 
+        ease: 'power4.out' 
+      }
+    );
+
+    // Staggered highlights entry slide from the right
     gsap.fromTo('.hero-fade-in',
-      { opacity: 0, y: 30 },
+      { opacity: 0, x: 50 },
       {
         opacity: 1,
-        y: 0,
-        duration: 1,
-        delay: 0.6,
-        stagger: 0.15,
-        ease: 'power2.out'
+        x: 0,
+        duration: 1.3,
+        delay: 0.4,
+        stagger: 0.08,
+        ease: 'power4.out'
+      }
+    );
+
+    // Value props strip slides from the right
+    gsap.fromTo('.value-props-strip',
+      { opacity: 0, x: 80 },
+      {
+        opacity: 1,
+        x: 0,
+        duration: 1.4,
+        delay: 0.3,
+        ease: 'power4.out'
       }
     );
 
@@ -177,47 +409,38 @@ export default function HomeClient() {
     return () => {
       window.removeEventListener('resize', resizeCanvas);
     };
-  }, [isAssetsLoaded]);
+  }, [isAssetsLoaded, preloaderFinished]);
 
   return (
     <div ref={mainRef} className="relative min-h-screen bg-stone-950">
-      {/* 1. Preloader Cover */}
-      {!isAssetsLoaded && (
-        <div className="fixed inset-0 z-50 bg-stone-950 flex flex-col items-center justify-center text-center px-6">
-          <div className="flex flex-col gap-1 mb-8">
-            <span className="font-serif text-3xl tracking-widest text-white uppercase font-semibold">
-              Angel
-            </span>
-            <span className="text-[10px] tracking-[0.3em] text-gold-400 uppercase -mt-1 font-sans">
-              Tiles & Stone Studio
-            </span>
-          </div>
-          <div className="w-64 h-1 bg-stone-900 rounded-full overflow-hidden mb-3 relative">
-            <div 
-              className="h-full bg-gradient-to-r from-gold-300 to-gold-500 rounded-full transition-all duration-300 ease-out" 
-              style={{ width: `${loadProgress}%` }}
-            />
-          </div>
-          <span className="text-[10px] font-sans uppercase tracking-[0.2em] text-stone-500">
-            Preloading Textures & Assets... {loadProgress}%
-          </span>
-        </div>
-      )}
+      {/* 1. Brand Preloader Concept */}
+      <Preloader onComplete={handlePreloaderComplete} />
 
       {/* Navbar Integration */}
       <Navbar />
 
-      {/* 2. Scroll-Scrubbed Canvas Hero Container */}
+      {/* 2. Main Page Content Wrapper (Animated sweep from right on load) */}
       <div 
-        ref={heroSectionRef} 
-        className="relative h-[250vh] w-full"
+        className="home-main-content"
+        style={{ opacity: preloaderFinished ? undefined : 0 }}
       >
+        {/* 2. Scroll-Scrubbed Canvas Hero Container */}
+        <div 
+          ref={heroSectionRef} 
+          className="relative h-[250vh] w-full"
+        >
         {/* Pinned Canvas Viewport */}
         <div className="sticky top-0 left-0 h-screen w-full overflow-hidden flex items-center justify-center z-0">
           <canvas ref={canvasRef} className="absolute inset-0 z-0 select-none pointer-events-none" />
           
           {/* Subtle dark gradient overlay over canvas */}
           <div className="absolute inset-0 bg-gradient-to-t from-stone-950 via-stone-950/40 to-stone-950/80 z-10" />
+
+          {/* Floating Golden Particles Overlay */}
+          <canvas 
+            ref={particleCanvasRef} 
+            className="absolute inset-0 z-12 pointer-events-none opacity-80" 
+          />
 
           {/* Hero text content overlay */}
           <div className="relative max-w-7xl mx-auto w-full px-6 h-full flex flex-col justify-end pb-32 z-20 pointer-events-none">
@@ -254,7 +477,7 @@ export default function HomeClient() {
       </div>
 
       {/* 3. Value Props Trust Strip */}
-      <section className="relative bg-stone-950 z-20 py-20 border-t border-b border-stone-900">
+      <section className="value-props-strip relative bg-stone-950 z-20 py-20 border-t border-b border-stone-900">
         <div className="max-w-7xl mx-auto px-6 grid grid-cols-1 md:grid-cols-3 gap-12">
           <div className="flex gap-4">
             <div className="w-12 h-12 rounded-lg bg-stone-900 flex items-center justify-center shrink-0 border border-stone-800 text-gold-400">
@@ -285,7 +508,7 @@ export default function HomeClient() {
               <MapPin className="w-6 h-6" />
             </div>
             <div>
-              <h3 className="text-sm font-bold uppercase tracking-wider text-white mb-2">Mandore Showroom</h3>
+              <h3 className="text-sm font-bold uppercase tracking-wider text-white mb-2">Shankar Nagar Showroom</h3>
               <p className="text-xs text-stone-500 leading-relaxed">
                 A massive layout displaying over 150+ variants. Experience slabs under natural day lighting and warm interior highlights.
               </p>
@@ -348,7 +571,7 @@ export default function HomeClient() {
               </div>
               <div className="relative aspect-video md:aspect-[4/3] rounded-xl overflow-hidden border border-stone-800 shadow-2xl">
                 <Image 
-                  src="/showroom/image_2.webp" 
+                  src="/showroom/statuario_marble_living.webp" 
                   alt="Statuario white slabs" 
                   fill
                   className="object-cover hover:scale-105 transition-transform duration-700"
@@ -388,7 +611,7 @@ export default function HomeClient() {
               </div>
               <div className="relative aspect-video md:aspect-[4/3] rounded-xl overflow-hidden border border-stone-800 shadow-2xl">
                 <Image 
-                  src="/showroom/image_5.webp" 
+                  src="/showroom/alaska_granite_kitchen.webp" 
                   alt="Black granite steps" 
                   fill
                   className="object-cover hover:scale-105 transition-transform duration-700"
@@ -428,7 +651,7 @@ export default function HomeClient() {
               </div>
               <div className="relative aspect-video md:aspect-[4/3] rounded-xl overflow-hidden border border-stone-800 shadow-2xl">
                 <Image 
-                  src="/showroom/image_8.webp" 
+                  src="/showroom/pgvt_tiles_lobby.webp" 
                   alt="PGVT Marble tiles" 
                   fill
                   className="object-cover hover:scale-105 transition-transform duration-700"
@@ -481,28 +704,46 @@ export default function HomeClient() {
           </div>
           
           {/* Before/After Split Demo */}
-          <div className="relative aspect-[4/3] rounded-xl overflow-hidden border border-stone-800 shadow-2xl group cursor-ew-resize">
-            {/* "After" Image (Left Side overlay) */}
-            <div className="absolute inset-0 z-0">
+          <div 
+            ref={sliderRef}
+            onMouseDown={handleMouseDown}
+            onTouchStart={handleTouchStart}
+            className="relative aspect-[4/3] rounded-xl overflow-hidden border border-stone-800 shadow-2xl group cursor-ew-resize select-none touch-none"
+          >
+            {/* "After" Image (Base Layer) */}
+            <div className="absolute inset-0 z-0 pointer-events-none">
               <Image 
-                src="/showroom/image_2.webp" 
+                src="/showroom/after_marble_floor.png" 
                 alt="Room showing luxury marble" 
                 fill 
                 className="object-cover"
                 sizes="(max-width: 768px) 100vw, 50vw"
+                priority
               />
             </div>
             
-            {/* "Before" Image (Right side cropped) */}
-            <div className="absolute inset-0 z-10 w-1/2 overflow-hidden border-r border-gold-400/50">
-              <div className="absolute inset-0 w-[200%] h-full">
-                <Image 
-                  src="/showroom/image_6.webp" 
-                  alt="Plain cement room floor" 
-                  fill 
-                  className="object-cover filter grayscale opacity-80"
-                  sizes="100vw"
-                />
+            {/* "Before" Image (Clipped Overlay Layer) */}
+            <div 
+              className="absolute inset-0 z-10 pointer-events-none"
+              style={{ clipPath: `polygon(0 0, ${sliderPos}% 0, ${sliderPos}% 100%, 0 100%)` }}
+            >
+              <Image 
+                src="/showroom/before_concrete_floor.png" 
+                alt="Plain cement room floor" 
+                fill 
+                className="object-cover"
+                sizes="(max-width: 768px) 100vw, 50vw"
+                priority
+              />
+            </div>
+
+            {/* Split Slider Divider Line & Handle */}
+            <div 
+              className="absolute inset-y-0 z-20 w-[2px] bg-gold-400 pointer-events-none"
+              style={{ left: `${sliderPos}%` }}
+            >
+              <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-8 h-8 rounded-full bg-gold-400 text-stone-950 border border-white flex items-center justify-center text-[9px] font-bold shadow-lg shadow-gold-500/30">
+                ◀▶
               </div>
             </div>
             
@@ -510,7 +751,7 @@ export default function HomeClient() {
             <div className="absolute left-4 top-4 z-20 px-3 py-1 bg-stone-950/80 backdrop-blur-md rounded text-[10px] text-stone-400 uppercase font-semibold border border-stone-800 select-none">
               Before
             </div>
-            <div className="absolute right-4 top-4 z-20 px-3 py-1 bg-gold-400 text-stone-950 rounded text-[10px] uppercase font-bold select-none">
+            <div className="absolute right-4 top-4 z-20 px-3 py-1 bg-gold-400 text-stone-950 rounded text-[10px] uppercase font-bold select-none animate-pulse">
               After (Visualizer Demo)
             </div>
           </div>
@@ -519,6 +760,7 @@ export default function HomeClient() {
 
       {/* Footer Integration */}
       <Footer />
+      </div> {/* end of .home-main-content */}
     </div>
   );
 }

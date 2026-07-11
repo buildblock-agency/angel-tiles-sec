@@ -1,9 +1,14 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import { Send, Phone, Mail, Clock, MapPin, CheckCircle, AlertTriangle } from 'lucide-react';
+import { useGSAP } from '@gsap/react';
+import gsap from 'gsap';
+import { ScrollTrigger } from 'gsap/ScrollTrigger';
 import Navbar from '@/components/Navbar';
 import Footer from '@/components/Footer';
+
+gsap.registerPlugin(ScrollTrigger);
 
 export default function ContactClient() {
   const [formState, setFormState] = useState({
@@ -16,6 +21,57 @@ export default function ContactClient() {
   
   const [status, setStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
   const [errorMessage, setErrorMessage] = useState('');
+
+  useGSAP(() => {
+    // Header reveals
+    gsap.fromTo('.contact-reveal-header', 
+      { opacity: 0, y: 15 }, 
+      { opacity: 1, y: 0, duration: 0.7, stagger: 0.1, ease: 'power2.out' }
+    );
+    // Contact cards reveal
+    gsap.fromTo('.contact-card',
+      { opacity: 0, y: 25 },
+      {
+        opacity: 1,
+        y: 0,
+        duration: 0.7,
+        stagger: 0.06,
+        ease: 'power2.out',
+        scrollTrigger: {
+          trigger: '.contact-grid',
+          start: 'top 90%',
+        }
+      }
+    );
+    // Map reveal
+    gsap.fromTo('.contact-map',
+      { opacity: 0, y: 20 },
+      {
+        opacity: 1,
+        y: 0,
+        duration: 0.8,
+        ease: 'power2.out',
+        scrollTrigger: {
+          trigger: '.contact-map',
+          start: 'top 90%',
+        }
+      }
+    );
+    // Form reveal
+    gsap.fromTo('.contact-form-container',
+      { opacity: 0, y: 30 },
+      {
+        opacity: 1,
+        y: 0,
+        duration: 0.8,
+        ease: 'power2.out',
+        scrollTrigger: {
+          trigger: '.contact-form-container',
+          start: 'top 90%',
+        }
+      }
+    );
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -68,14 +124,14 @@ export default function ContactClient() {
       <main className="flex-1 max-w-7xl mx-auto px-6 py-20 w-full">
         {/* Page Header */}
         <div className="max-w-2xl mb-16">
-          <span className="text-gold-400 text-xs font-bold uppercase tracking-[0.3em] block mb-4">
+          <span className="contact-reveal-header text-gold-400 text-xs font-bold uppercase tracking-[0.3em] block mb-4">
             Visit Studio
           </span>
-          <h1 className="font-serif text-4xl md:text-6xl uppercase tracking-wide text-white mb-6">
+          <h1 className="contact-reveal-header font-serif text-4xl md:text-6xl uppercase tracking-wide text-white mb-6">
             Connect With <span className="italic text-gold-foil">Our Studio</span>
           </h1>
-          <p className="text-stone-400 text-sm leading-relaxed">
-            Ready to inspect premium slabs in person? Submit your requirements below, or head over to our Mandore Road showroom to inspect block runs.
+          <p className="contact-reveal-header text-stone-400 text-sm leading-relaxed">
+            Ready to inspect premium slabs in person? Submit your requirements below, or head over to our Shankar Nagar showroom at Pipli Chouraha to browse our collections and premium slabs.
           </p>
         </div>
 
@@ -84,25 +140,25 @@ export default function ContactClient() {
           
           {/* Left Column: Contact details */}
           <div className="flex flex-col gap-8">
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-8 text-xs text-stone-400 font-sans">
-              <div className="border border-stone-900 rounded-xl p-6 bg-stone-900/10 flex flex-col gap-3">
+            <div className="contact-grid grid grid-cols-1 sm:grid-cols-2 gap-8 text-xs text-stone-400 font-sans">
+              <div className="contact-card border border-stone-900 rounded-xl p-6 bg-stone-900/10 flex flex-col gap-3">
                 <MapPin className="w-6 h-6 text-gold-400" />
                 <h4 className="font-bold text-white uppercase tracking-wider">Showroom Address</h4>
                 <p className="leading-relaxed">
-                  Plot No. 12, Industrial Area, Opposite New Mandi, Mandore Road, Jodhpur, Rajasthan, 342007
+                  Krishna Kunj, 197, Pipli Chouraha, Shankar Nagar, Bhadu Market, Jodhpur, Rajasthan 342008
                 </p>
               </div>
 
-              <div className="border border-stone-900 rounded-xl p-6 bg-stone-900/10 flex flex-col gap-3">
+              <div className="contact-card border border-stone-900 rounded-xl p-6 bg-stone-900/10 flex flex-col gap-3">
                 <Phone className="w-6 h-6 text-gold-400" />
                 <h4 className="font-bold text-white uppercase tracking-wider">Phone & WhatsApp</h4>
                 <p>
-                  Slab Sourcing: +91 98765 43210 <br />
-                  Office Landline: 0291 2940022
+                  Sourcing & Retail: +91 81479 41542 <br />
+                  Studio Line: +91 98290 44444
                 </p>
               </div>
 
-              <div className="border border-stone-900 rounded-xl p-6 bg-stone-900/10 flex flex-col gap-3">
+              <div className="contact-card border border-stone-900 rounded-xl p-6 bg-stone-900/10 flex flex-col gap-3">
                 <Mail className="w-6 h-6 text-gold-400" />
                 <h4 className="font-bold text-white uppercase tracking-wider">Email Correspondence</h4>
                 <p>
@@ -111,21 +167,21 @@ export default function ContactClient() {
                 </p>
               </div>
 
-              <div className="border border-stone-900 rounded-xl p-6 bg-stone-900/10 flex flex-col gap-3">
+              <div className="contact-card border border-stone-900 rounded-xl p-6 bg-stone-900/10 flex flex-col gap-3">
                 <Clock className="w-6 h-6 text-gold-400" />
                 <h4 className="font-bold text-white uppercase tracking-wider">Showroom Hours</h4>
                 <p>
-                  Monday - Saturday: 10:00 AM - 8:30 PM <br />
-                  Sunday: Closed (Prior Booking Only)
+                  Monday - Sunday: 8:00 AM - 11:00 PM <br />
+                  Open 7 Days (Prior Booking Welcomed)
                 </p>
               </div>
             </div>
 
             {/* Map Embed */}
-            <div className="relative h-[300px] rounded-xl overflow-hidden border border-stone-900">
+            <div className="contact-map relative h-[300px] rounded-xl overflow-hidden border border-stone-900">
               <iframe
                 title="Angel Tiles Showroom Location Map"
-                src="https://www.google.com/maps/embed?pb=!1m18!1m12!1m3!1d14304.774431876558!2d73.04273874999999!3d26.31976075!2m3!1f0!2f0!3f0!3m2!1i1024!2i768!4f13.1!3m3!1m2!1s0x39418c39e2fdbdf9%3A0xe54d924cb4d142bd!2sMandore%20Road%2C%20Jodhpur%2C%20Rajasthan%20342007!5e0!3m2!1sen!2sin!4v1700000000000!5m2!1sen!2sin"
+                src="https://maps.google.com/maps?q=Angel%20Tiles%20and%20Stone%20Studio%20Pipli%20Chouraha%20Jodhpur&t=&z=15&ie=UTF8&iwloc=&output=embed"
                 width="100%"
                 height="100%"
                 style={{ border: 0 }}
@@ -138,7 +194,7 @@ export default function ContactClient() {
           </div>
 
           {/* Right Column: Sourcing Enquiry Form */}
-          <div className="border border-stone-900 rounded-xl p-8 bg-stone-900/10">
+          <div className="contact-form-container border border-stone-900 rounded-xl p-8 bg-stone-900/10">
             <h3 className="font-serif text-xl md:text-2xl text-white uppercase tracking-wider mb-6 border-b border-stone-900 pb-4">
               Enquiry Form
             </h3>
@@ -189,7 +245,7 @@ export default function ContactClient() {
                       id="phone"
                       value={formState.phone}
                       onChange={(e) => setFormState({ ...formState, phone: e.target.value })}
-                      placeholder="e.g. +91 98765 43210"
+                      placeholder="e.g. +91 81479 41542"
                       className="bg-stone-950 border border-stone-900 rounded px-4 py-3 text-white focus:outline-none focus:border-gold-400"
                       required
                     />

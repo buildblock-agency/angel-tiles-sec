@@ -1,9 +1,11 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
 import { ArrowLeft, Sparkles, Check, Phone, ArrowRight, Layers } from 'lucide-react';
+import { useGSAP } from '@gsap/react';
+import gsap from 'gsap';
 import Navbar from '@/components/Navbar';
 import Footer from '@/components/Footer';
 import { Product } from '@/content/products';
@@ -16,6 +18,17 @@ interface ProductClientProps {
 export default function ProductClient({ product, relatedProducts }: ProductClientProps) {
   const [zoomScale, setZoomScale] = useState(1);
   const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
+
+  useGSAP(() => {
+    gsap.fromTo('.product-hero-image', 
+      { opacity: 0, scale: 1.05 }, 
+      { opacity: 1, scale: 1, duration: 1.2, ease: 'power3.out' }
+    );
+    gsap.fromTo('.product-detail-reveal',
+      { opacity: 0, y: 20 },
+      { opacity: 1, y: 0, duration: 0.7, stagger: 0.06, delay: 0.1, ease: 'power2.out' }
+    );
+  }, []);
 
   const handleMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
     const rect = e.currentTarget.getBoundingClientRect();
@@ -53,7 +66,7 @@ export default function ProductClient({ product, relatedProducts }: ProductClien
           {/* Left Column: Interactive Image Zoom */}
           <div className="flex flex-col gap-4">
             <div 
-              className="relative aspect-square md:aspect-[4/3] lg:aspect-square bg-stone-900 border border-stone-850 rounded-xl overflow-hidden cursor-crosshair group"
+              className="product-hero-image relative aspect-square md:aspect-[4/3] lg:aspect-square bg-stone-900 border border-stone-850 rounded-xl overflow-hidden cursor-crosshair group"
               onMouseMove={handleMouseMove}
               onMouseEnter={handleMouseEnter}
               onMouseLeave={handleMouseLeave}
@@ -105,26 +118,26 @@ export default function ProductClient({ product, relatedProducts }: ProductClien
           <div className="flex flex-col justify-between">
             <div>
               {/* Category Tag */}
-              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded bg-stone-900 border border-stone-800 text-[10px] font-bold text-gold-400 uppercase tracking-wider mb-4">
+              <span className="product-detail-reveal inline-flex items-center gap-1.5 px-3 py-1 rounded bg-stone-900 border border-stone-800 text-[10px] font-bold text-gold-400 uppercase tracking-wider mb-4">
                 <Layers className="w-3.5 h-3.5" />
                 <span>{product.category}</span>
               </span>
 
-              <h1 className="font-serif text-4xl md:text-5xl uppercase tracking-wide text-white mb-4">
+              <h1 className="product-detail-reveal font-serif text-4xl md:text-5xl uppercase tracking-wide text-white mb-4">
                 {product.name}
               </h1>
 
-              <div className="flex items-center gap-2 mb-6">
+              <div className="product-detail-reveal flex items-center gap-2 mb-6">
                 <span className="text-xs text-stone-500">Estimated Sourcing Rate:</span>
                 <span className="text-lg text-gold-400 font-bold tracking-wider">{product.priceRange}</span>
               </div>
 
-              <p className="text-sm text-stone-400 leading-relaxed mb-8">
+              <p className="product-detail-reveal text-sm text-stone-400 leading-relaxed mb-8">
                 {product.description}
               </p>
 
               {/* Specs sheet */}
-              <div className="border border-stone-900 rounded-xl bg-stone-900/10 p-6 mb-8">
+              <div className="product-detail-reveal border border-stone-900 rounded-xl bg-stone-900/10 p-6 mb-8">
                 <h4 className="text-xs font-bold uppercase tracking-wider text-white border-b border-stone-900 pb-3 mb-4">
                   Material Specifications
                 </h4>
@@ -149,7 +162,7 @@ export default function ProductClient({ product, relatedProducts }: ProductClien
               </div>
 
               {/* Key Features */}
-              <div className="mb-8">
+              <div className="product-detail-reveal mb-8">
                 <h4 className="text-xs font-bold uppercase tracking-wider text-white mb-4">Key Characteristics</h4>
                 <ul className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   {product.features.map((feat) => (
@@ -163,7 +176,7 @@ export default function ProductClient({ product, relatedProducts }: ProductClien
             </div>
 
             {/* CTAs */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 border-t border-stone-900 pt-8 mt-4">
+            <div className="product-detail-reveal grid grid-cols-1 sm:grid-cols-2 gap-4 border-t border-stone-900 pt-8 mt-4">
               <Link 
                 href={`/visualize?product=${product.slug}`}
                 className="inline-flex items-center justify-center gap-2.5 px-8 py-4 bg-gradient-to-r from-gold-500 to-gold-600 text-stone-950 font-bold text-xs uppercase tracking-widest rounded-full transition-transform hover:scale-105 shadow-lg shadow-gold-500/20"
@@ -173,7 +186,7 @@ export default function ProductClient({ product, relatedProducts }: ProductClien
                 <span>See it in your room</span>
               </Link>
               <a 
-                href={`https://wa.me/919876543210?text=${waMessage}`}
+                href={`https://wa.me/918147941542?text=${waMessage}`}
                 className="inline-flex items-center justify-center gap-2.5 px-8 py-4 border border-stone-800 text-white hover:border-white transition-colors font-bold text-xs uppercase tracking-widest rounded-full"
                 target="_blank"
                 rel="noopener noreferrer"

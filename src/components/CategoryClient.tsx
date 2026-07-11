@@ -1,12 +1,17 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
 import { ArrowRight, SlidersHorizontal, Layers, Sparkles } from 'lucide-react';
+import { useGSAP } from '@gsap/react';
+import gsap from 'gsap';
+import { ScrollTrigger } from 'gsap/ScrollTrigger';
 import Navbar from '@/components/Navbar';
 import Footer from '@/components/Footer';
 import { Product } from '@/content/products';
+
+gsap.registerPlugin(ScrollTrigger);
 
 interface CategoryClientProps {
   categoryName: string;
@@ -35,6 +40,43 @@ export default function CategoryClient({
     return matchFinish && matchApp;
   });
 
+  const gridRef = useRef<HTMLDivElement>(null);
+
+  useGSAP(() => {
+    // Header entry animation
+    gsap.fromTo('.category-subtitle', 
+      { opacity: 0, y: 15 }, 
+      { opacity: 1, y: 0, duration: 0.6, ease: 'power2.out' }
+    );
+    gsap.fromTo('.category-title', 
+      { opacity: 0, y: 30 }, 
+      { opacity: 1, y: 0, duration: 0.8, delay: 0.1, ease: 'power3.out' }
+    );
+    gsap.fromTo('.category-description', 
+      { opacity: 0, y: 20 }, 
+      { opacity: 1, y: 0, duration: 0.8, delay: 0.2, ease: 'power2.out' }
+    );
+
+    // Grid cards animation
+    const cards = gsap.utils.toArray('.product-card');
+    if (cards.length > 0) {
+      gsap.fromTo(cards,
+        { opacity: 0, y: 30 },
+        {
+          opacity: 1,
+          y: 0,
+          duration: 0.7,
+          stagger: 0.06,
+          ease: 'power2.out',
+          scrollTrigger: {
+            trigger: gridRef.current,
+            start: 'top 90%',
+          }
+        }
+      );
+    }
+  }, [filteredProducts]);
+
   return (
     <div className="relative min-h-screen bg-stone-950 flex flex-col justify-between">
       <Navbar />
@@ -42,13 +84,13 @@ export default function CategoryClient({
       <main className="flex-1 max-w-7xl mx-auto px-6 py-20 w-full">
         {/* Header */}
         <div className="max-w-3xl mb-12">
-          <span className="text-gold-400 text-xs font-bold uppercase tracking-[0.3em] block mb-4">
+          <span className="category-subtitle text-gold-400 text-xs font-bold uppercase tracking-[0.3em] block mb-4">
             Showroom Sourcing
           </span>
-          <h1 className="font-serif text-4xl md:text-6xl uppercase tracking-wide text-white mb-6">
+          <h1 className="category-title font-serif text-4xl md:text-6xl uppercase tracking-wide text-white mb-6">
             {categoryName} <span className="italic text-gold-foil">Collection</span>
           </h1>
-          <p className="text-stone-400 text-sm leading-relaxed">
+          <p className="category-description text-stone-400 text-sm leading-relaxed">
             {categoryDesc}
           </p>
         </div>
@@ -95,11 +137,11 @@ export default function CategoryClient({
 
         {/* Products Grid */}
         {filteredProducts.length > 0 ? (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8 mb-20">
+          <div ref={gridRef} className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8 mb-20">
             {filteredProducts.map((product) => (
               <div 
                 key={product.slug}
-                className="group bg-stone-900/40 border border-stone-900 hover:border-stone-800/80 rounded-xl overflow-hidden flex flex-col justify-between p-4 transition-all duration-300 shadow-xl"
+                className="product-card group bg-stone-900/40 border border-stone-900 hover:border-stone-800/80 rounded-xl overflow-hidden flex flex-col justify-between p-4 transition-all duration-300 shadow-xl"
               >
                 <div className="relative aspect-video rounded-lg overflow-hidden border border-stone-800 mb-5">
                   <Image 

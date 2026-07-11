@@ -2,6 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 import LenisProvider from "@/components/LenisProvider";
 import CustomCursor from "@/components/CustomCursor";
+import PageTransition from "@/components/PageTransition";
+import FloatingBooking from "@/components/FloatingBooking";
 
 export const metadata: Metadata = {
   title: "Angel Tiles & Stone Studio — Flagship Showroom Jodhpur",
@@ -30,11 +32,16 @@ export default function RootLayout({
         
         {/* Custom cursor element */}
         <CustomCursor />
+
+        {/* Global Floating Showroom Booking Widget */}
+        <FloatingBooking />
         
         {/* Smooth Scroll Wrapper */}
         <LenisProvider>
           <div className="flex flex-col flex-1 relative z-10">
-            {children}
+            <PageTransition>
+              {children}
+            </PageTransition>
           </div>
         </LenisProvider>
       </body>
