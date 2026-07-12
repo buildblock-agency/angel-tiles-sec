@@ -1,4 +1,4 @@
-import VisualizerClient from "@/components/VisualizerClient";
+import VisualizePageClient from "./VisualizePageClient";
 
 export const metadata = {
   title: "Perspective Room Visualizer — Angel Tiles & Stone",
@@ -6,5 +6,5 @@ export const metadata = {
 };
 
 export default function VisualizePage() {
-  return <VisualizerClient />;
+  return <VisualizePageClient />;
 }

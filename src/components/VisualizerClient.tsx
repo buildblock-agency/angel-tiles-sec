@@ -6,7 +6,8 @@ import Link from 'next/link';
 import Image from 'next/image';
 import { 
   Sparkles, Upload, Download, ArrowLeft, RotateCcw, Check, Phone, Eye, 
-  MessageSquare, Sliders, Calculator, Calendar, Send, X, ChevronRight, HelpCircle 
+  MessageSquare, Sliders, Calculator, Calendar, Send, X, ChevronRight, HelpCircle,
+  Loader2, Trash2
 } from 'lucide-react';
 import Navbar from '@/components/Navbar';
 import Footer from '@/components/Footer';
@@ -23,12 +24,101 @@ interface Message {
   products?: Product[];
 }
 
+interface MaskedRegion {
+  id: string;
+  name: string;
+  seedPoint: Point;
+  maskCanvas: HTMLCanvasElement;
+  product: Product;
+  points: Point[];
+  opacity: number;
+}
+
 const PRESET_ROOMS = [
   { id: 'lobby', name: 'Luxury Lobby Floor', url: '/presets/preset_lobby_floor.webp' },
   { id: 'living', name: 'Modern Living Floor', url: '/presets/preset_living_floor.webp' },
   { id: 'bedroom', name: 'Spacious Bed Floor', url: '/presets/preset_bedroom_floor.webp' },
   { id: 'wall', name: 'Bath Feature Wall', url: '/presets/preset_bathroom_wall.webp' },
 ];
+
+// --- Segment Anything Model (SAM) Tensor to Canvas Helper ---
+
+const createMaskCanvasFromTensor = (
+  maskTensor: any,
+  maskIdx: number,
+  width: number,
+  height: number
+): HTMLCanvasElement => {
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return canvas;
+
+  const imgData = ctx.createImageData(width, height);
+  const data = imgData.data;
+  const maskData = maskTensor.data;
+  const stride = width * height;
+  const offset = maskIdx * stride;
+
+  for (let i = 0; i < stride; i++) {
+    const isMask = maskData[offset + i];
+    const pixelIndex = i * 4;
+    if (isMask) {
+      data[pixelIndex] = 255;     // R
+      data[pixelIndex + 1] = 255; // G
+      data[pixelIndex + 2] = 255; // B
+      data[pixelIndex + 3] = 255; // A (solid opaque)
+    } else {
+      data[pixelIndex + 3] = 0;   // A (transparent)
+    }
+  }
+
+  ctx.putImageData(imgData, 0, 0);
+  return canvas;
+};
+
+function getMaskBoundingBox(maskCanvas: HTMLCanvasElement): { minX: number; maxX: number; minY: number; maxY: number } {
+  const width = maskCanvas.width;
+  const height = maskCanvas.height;
+  const ctx = maskCanvas.getContext('2d');
+  
+  let minX = width;
+  let maxX = 0;
+  let minY = height;
+  let maxY = 0;
+  
+  if (ctx) {
+    const imgData = ctx.getImageData(0, 0, width, height);
+    const data = imgData.data;
+    
+    let found = false;
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const alpha = data[(y * width + x) * 4 + 3];
+        if (alpha > 0) {
+          found = true;
+          if (x < minX) minX = x;
+          if (x > maxX) maxX = x;
+          if (y < minY) minY = y;
+          if (y > maxY) maxY = y;
+        }
+      }
+    }
+    
+    if (!found) {
+      return { minX: 0.2, maxX: 0.8, minY: 0.2, maxY: 0.8 };
+    }
+  }
+  
+  // Return normalized coordinates
+  return {
+    minX: Math.max(0.01, minX / width),
+    maxX: Math.min(0.99, maxX / width),
+    minY: Math.max(0.01, minY / height),
+    maxY: Math.min(0.99, maxY / height),
+  };
+}
 
 export default function VisualizerClient() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -38,35 +128,48 @@ export default function VisualizerClient() {
   // Core Visualizer States
   const [selectedRoom, setSelectedRoom] = useState(PRESET_ROOMS[0].url);
   const [selectedProduct, setSelectedProduct] = useState<Product>(PRODUCTS[0]);
-  const [points, setPoints] = useState<Point[]>([
-    { x: 0.2, y: 0.6 }, // Top-Left
-    { x: 0.8, y: 0.6 }, // Top-Right
-    { x: 0.9, y: 0.85 }, // Bottom-Right
-    { x: 0.1, y: 0.85 }, // Bottom-Left
-  ]);
+  
+  // Smart Wall Detection States
+  const [maskedRegions, setMaskedRegions] = useState<MaskedRegion[]>([]);
+  const [activeRegionId, setActiveRegionId] = useState<string | null>(null);
+  const [hoveredRegionId, setHoveredRegionId] = useState<string | null>(null);
+  
+  // AI Vision Preloader & Scanner States
+  const [isScanning, setIsScanning] = useState(false);
+  const [scanProgress, setScanProgress] = useState(0);
+  const [scanMessage, setScanMessage] = useState('');
+  const [hasAnalyzed, setHasAnalyzed] = useState(false);
+
+  // SAM (Segment Anything Model) refs for caching
+  const samModelRef = useRef<any>(null);
+  const samProcessorRef = useRef<any>(null);
+  const samEmbeddingsCacheRef = useRef<Map<string, { embeddings: any; inputs: any; rawImage: any }>>(new Map());
+  
+  // Click ripple effect state
+  const [ripple, setRipple] = useState<{ x: number; y: number; time: number } | null>(null);
   const [activePoint, setActivePoint] = useState<number | null>(null);
   const [isWarping, setIsWarping] = useState(true);
   const [viewMode, setViewMode] = useState<'after' | 'before'>('after');
   const [uploadError, setUploadError] = useState<string | null>(null);
 
-  // 1. Slab Selection Live Inventory States
+  // Slab Selection Live Inventory States
   const [selectedLot, setSelectedLot] = useState('lot-1');
   const [lotOffset, setLotOffset] = useState(0);
 
-  // 2. Comparison Mode States
+  // Comparison Mode States
   const [compareMode, setCompareMode] = useState(false);
   const [compareProduct, setCompareProduct] = useState<Product>(PRODUCTS[1]);
   const [splitX, setSplitX] = useState(0.5);
   const [isDraggingSplit, setIsDraggingSplit] = useState(false);
 
-  // 3. Quote Generator States
+  // Quote Generator States
   const [isQuoteModalOpen, setIsQuoteModalOpen] = useState(false);
   const [quoteArea, setQuoteArea] = useState(1200);
   const [quoteApp, setQuoteApp] = useState('Flooring');
   const [quoteWastage, setQuoteWastage] = useState(10);
   const [quoteClientLocation, setQuoteClientLocation] = useState('Jodhpur, Rajasthan');
 
-  // 4. AI Consultant States
+  // AI Consultant States
   const [isConsultantOpen, setIsConsultantOpen] = useState(false);
   const [inputMessage, setInputMessage] = useState('');
   const [isTyping, setIsTyping] = useState(false);
@@ -79,40 +182,154 @@ export default function VisualizerClient() {
 
   // Assets refs
   const backgroundImageRef = useRef<HTMLImageElement | null>(null);
-  const textureImageRef = useRef<HTMLImageElement | null>(null);
-  const compareTextureImageRef = useRef<HTMLImageElement | null>(null);
+  const [loadedTextures, setLoadedTextures] = useState<Record<string, HTMLImageElement>>({});
 
-  // Load background image, main texture, and comparison texture
+  // Lazy load SAM model and processor
+  const lazyLoadSam = async (onProgress: (percent: number, msg: string) => void) => {
+    if (samModelRef.current && samProcessorRef.current) {
+      return { model: samModelRef.current, processor: samProcessorRef.current };
+    }
+
+    onProgress(10, "Downloading Segment Anything AI...");
+    
+    // Dynamically import transformers to avoid Node/SSR errors during build
+    const { SamModel, AutoProcessor, env } = await import('@xenova/transformers');
+    
+    env.allowLocalModels = false; // Ensure it looks online
+
+    onProgress(30, "Loading SlimSAM Neural Model (15MB)...");
+    
+    const processor = await AutoProcessor.from_pretrained('Xenova/slimsam-77-uniform');
+    onProgress(60, "Initializing SlimSAM Vision Encoder...");
+    
+    const model = await SamModel.from_pretrained('Xenova/slimsam-77-uniform');
+    
+    samModelRef.current = model;
+    samProcessorRef.current = processor;
+    
+    onProgress(85, "AI Segmentation Model Loaded!");
+    return { model, processor };
+  };
+
+  // Trigger Scanning animation and process embeddings via SAM
+  const startScanning = async (img: HTMLImageElement) => {
+    setIsScanning(true);
+    setScanProgress(0);
+    setScanMessage("Initializing Smart AI Vision Engine...");
+    setHasAnalyzed(false);
+
+    try {
+      const { model, processor } = await lazyLoadSam((percent, msg) => {
+        setScanProgress(percent);
+        setScanMessage(msg);
+      });
+
+      const cacheKey = img.src;
+      if (samEmbeddingsCacheRef.current.has(cacheKey)) {
+        setScanProgress(95);
+        setScanMessage("Loading Cached Room Geometry...");
+        await new Promise(resolve => setTimeout(resolve, 300));
+        setScanProgress(100);
+        setIsScanning(false);
+        setHasAnalyzed(true);
+        return;
+      }
+
+      setScanProgress(88);
+      setScanMessage("Analyzing Room Geometry (SAM Vision Encoder)...");
+      
+      const { RawImage } = await import('@xenova/transformers');
+      const rawImage = await RawImage.read(img.src);
+      
+      const inputs = await processor(rawImage);
+      const imageEmbeddings = await model.get_image_embeddings(inputs);
+      
+      samEmbeddingsCacheRef.current.set(cacheKey, {
+        embeddings: imageEmbeddings,
+        inputs: inputs,
+        rawImage: rawImage
+      });
+      
+      setScanProgress(100);
+      setScanMessage("Ready for Material Application!");
+      
+      setTimeout(() => {
+        setIsScanning(false);
+        setHasAnalyzed(true);
+      }, 300);
+
+    } catch (err) {
+      console.error("SAM Init/Embedding failed:", err);
+      setScanMessage("Failed to initialize AI Vision Engine");
+      setUploadError("Failed to run Segment Anything model on the image.");
+      setIsScanning(false);
+    }
+  };
+
+  // Load background image
   useEffect(() => {
     const bgImg = new window.Image();
     bgImg.src = selectedRoom;
     bgImg.crossOrigin = 'anonymous';
     bgImg.onload = () => {
       backgroundImageRef.current = bgImg;
+      // Start AI scan
+      startScanning(bgImg);
+      // Reset regions on room change
+      setMaskedRegions([]);
+      setActiveRegionId(null);
+      setHoveredRegionId(null);
       drawCanvas();
     };
+  }, [selectedRoom]);
 
-    const texImg = new window.Image();
-    texImg.src = selectedProduct.texture;
-    texImg.crossOrigin = 'anonymous';
-    texImg.onload = () => {
-      textureImageRef.current = texImg;
-      drawCanvas();
-    };
+  // Preload and cache textures dynamically
+  useEffect(() => {
+    const texturesToLoad = [selectedProduct, compareProduct, ...maskedRegions.map(r => r.product)];
+    texturesToLoad.forEach(prod => {
+      const slug = prod.slug;
+      if (!loadedTextures[slug]) {
+        const img = new window.Image();
+        img.src = prod.texture;
+        img.crossOrigin = 'anonymous';
+        img.onload = () => {
+          setLoadedTextures(prev => ({ ...prev, [slug]: img }));
+        };
+      }
+    });
+  }, [selectedProduct, compareProduct, maskedRegions]);
 
-    const compareTexImg = new window.Image();
-    compareTexImg.src = compareProduct.texture;
-    compareTexImg.crossOrigin = 'anonymous';
-    compareTexImg.onload = () => {
-      compareTextureImageRef.current = compareTexImg;
-      drawCanvas();
-    };
-  }, [selectedRoom, selectedProduct, compareProduct]);
+  // Support deep-linking from product pages via URL parameter ?product=slug
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      const productSlug = params.get('product');
+      if (productSlug) {
+        const matchingProduct = PRODUCTS.find(p => p.slug === productSlug);
+        if (matchingProduct) {
+          setSelectedProduct(matchingProduct);
+        }
+      }
+    }
+  }, []);
 
-  // Redraw canvas when points, selection, or viewMode changes
+  // Redraw canvas when states change
   useEffect(() => {
     drawCanvas();
-  }, [points, viewMode, isWarping, compareMode, splitX, lotOffset]);
+  }, [
+    maskedRegions,
+    activeRegionId,
+    hoveredRegionId,
+    viewMode,
+    isWarping,
+    compareMode,
+    splitX,
+    lotOffset,
+    loadedTextures,
+    isScanning,
+    scanProgress,
+    ripple
+  ]);
 
   // Scroll to bottom of chat when messages change
   useEffect(() => {
@@ -124,7 +341,6 @@ export default function VisualizerClient() {
   const drawCanvas = () => {
     const canvas = canvasRef.current;
     const bgImg = backgroundImageRef.current;
-    const texImg = textureImageRef.current;
 
     if (!canvas || !bgImg) return;
     const ctx = canvas.getContext('2d');
@@ -142,35 +358,110 @@ export default function VisualizerClient() {
     // 1. Draw base room image
     ctx.drawImage(bgImg, 0, 0, canvas.width, canvas.height);
 
-    // 2. Perform texture warp (if active and after view mode is selected)
-    if (viewMode === 'after' && isWarping && texImg) {
-      if (compareMode && compareTextureImageRef.current) {
-        // Draw Left Split (Product A with lotOffset)
-        ctx.save();
-        ctx.beginPath();
-        ctx.rect(0, 0, canvas.width * splitX, canvas.height);
-        ctx.clip();
-        drawWarpedTexture(ctx, canvas.width, canvas.height, texImg, lotOffset);
-        ctx.restore();
+    // 2. Perform texture warp for each region
+    if (viewMode === 'after' && isWarping) {
+      maskedRegions.forEach((region) => {
+        const texImg = loadedTextures[region.product.slug];
+        if (!texImg) return;
+        
+        // Draw the warped texture for this region
+        const offscreenCanvas = drawWarpedTexture(canvas.width, canvas.height, texImg, lotOffset, region.points);
+        if (!offscreenCanvas) return;
+        
+        // Combine offscreen canvas with mask and draw on main canvas
+        const tempCanvas = document.createElement('canvas');
+        tempCanvas.width = canvas.width;
+        tempCanvas.height = canvas.height;
+        const tempCtx = tempCanvas.getContext('2d');
+        if (tempCtx) {
+          tempCtx.drawImage(offscreenCanvas, 0, 0);
+          tempCtx.globalCompositeOperation = 'destination-in';
+          tempCtx.drawImage(region.maskCanvas, 0, 0, canvas.width, canvas.height);
+          
+          ctx.save();
+          
+          if (compareMode && loadedTextures[compareProduct.slug]) {
+            const compareTexImg = loadedTextures[compareProduct.slug];
+            const offscreenCompare = drawWarpedTexture(canvas.width, canvas.height, compareTexImg, 0, region.points);
+            if (offscreenCompare) {
+              const tempCanvasCompare = document.createElement('canvas');
+              tempCanvasCompare.width = canvas.width;
+              tempCanvasCompare.height = canvas.height;
+              const tempCtxCompare = tempCanvasCompare.getContext('2d');
+              if (tempCtxCompare) {
+                tempCtxCompare.drawImage(offscreenCompare, 0, 0);
+                tempCtxCompare.globalCompositeOperation = 'destination-in';
+                tempCtxCompare.drawImage(region.maskCanvas, 0, 0, canvas.width, canvas.height);
+              }
+              
+              // Draw Left Split (Product A with lotOffset)
+              ctx.save();
+              ctx.beginPath();
+              ctx.rect(0, 0, canvas.width * splitX, canvas.height);
+              ctx.clip();
+              ctx.globalAlpha = region.opacity;
+              ctx.drawImage(tempCanvas, 0, 0);
+              ctx.globalCompositeOperation = 'multiply';
+              ctx.globalAlpha = 0.35 * region.opacity;
+              ctx.drawImage(bgImg, 0, 0, canvas.width, canvas.height);
+              ctx.restore();
 
-        // Draw Right Split (Product B without lotOffset/default)
+              // Draw Right Split (Product B without lotOffset/default)
+              ctx.save();
+              ctx.beginPath();
+              ctx.rect(canvas.width * splitX, 0, canvas.width * (1 - splitX), canvas.height);
+              ctx.clip();
+              ctx.globalAlpha = region.opacity;
+              ctx.drawImage(tempCanvasCompare, 0, 0);
+              ctx.globalCompositeOperation = 'multiply';
+              ctx.globalAlpha = 0.35 * region.opacity;
+              ctx.drawImage(bgImg, 0, 0, canvas.width, canvas.height);
+              ctx.restore();
+            }
+          } else {
+            ctx.globalAlpha = region.opacity;
+            ctx.drawImage(tempCanvas, 0, 0);
+            
+            ctx.globalCompositeOperation = 'multiply';
+            ctx.globalAlpha = 0.35 * region.opacity;
+            ctx.drawImage(bgImg, 0, 0, canvas.width, canvas.height);
+          }
+          
+          ctx.restore();
+        }
+      });
+    }
+
+    // 3. Highlight hovered region during drag-over
+    if (hoveredRegionId) {
+      const hoveredReg = maskedRegions.find(r => r.id === hoveredRegionId);
+      if (hoveredReg && hoveredReg.maskCanvas) {
         ctx.save();
-        ctx.beginPath();
-        ctx.rect(canvas.width * splitX, 0, canvas.width * (1 - splitX), canvas.height);
-        ctx.clip();
-        drawWarpedTexture(ctx, canvas.width, canvas.height, compareTextureImageRef.current, 0);
+        ctx.globalAlpha = 0.35;
+        const tempCanvas = document.createElement('canvas');
+        tempCanvas.width = canvas.width;
+        tempCanvas.height = canvas.height;
+        const tempCtx = tempCanvas.getContext('2d');
+        if (tempCtx) {
+          tempCtx.fillStyle = '#d49f1a';
+          tempCtx.fillRect(0, 0, canvas.width, canvas.height);
+          tempCtx.globalCompositeOperation = 'destination-in';
+          tempCtx.drawImage(hoveredReg.maskCanvas, 0, 0, canvas.width, canvas.height);
+          ctx.drawImage(tempCanvas, 0, 0);
+        }
         ctx.restore();
-      } else {
-        drawWarpedTexture(ctx, canvas.width, canvas.height, texImg, lotOffset);
       }
     }
 
-    // 3. Draw guiding wires and handles (only if viewMode is after)
-    if (viewMode === 'after') {
-      drawGuides(ctx, canvas.width, canvas.height);
+    // 4. Draw active region corner handles and guidelines (only if viewMode is after)
+    if (viewMode === 'after' && activeRegionId) {
+      const activeReg = maskedRegions.find(r => r.id === activeRegionId);
+      if (activeReg) {
+        drawGuides(ctx, canvas.width, canvas.height, activeReg.points);
+      }
     }
 
-    // 4. Draw Compare split slider divider line
+    // 5. Draw Compare split slider divider line
     if (viewMode === 'after' && compareMode) {
       const sx = splitX * canvas.width;
       
@@ -201,104 +492,103 @@ export default function VisualizerClient() {
       ctx.textBaseline = 'middle';
       ctx.fillText('◀  ▶', sx, canvas.height / 2);
     }
+
+    // 6. Draw AI Scanning overlay (if scanning is active)
+    if (isScanning) {
+      const yScan = (scanProgress / 100) * canvas.height;
+      
+      // Draw translucent gold filter above the scan line
+      ctx.save();
+      ctx.fillStyle = 'rgba(212, 159, 26, 0.08)';
+      ctx.beginPath();
+      ctx.rect(0, 0, canvas.width, yScan);
+      ctx.fill();
+      ctx.restore();
+      
+      // Draw the scanning line (glowing gold)
+      ctx.beginPath();
+      ctx.moveTo(0, yScan);
+      ctx.lineTo(canvas.width, yScan);
+      ctx.lineWidth = 4;
+      ctx.strokeStyle = 'rgba(212, 159, 26, 0.85)';
+      ctx.shadowColor = '#d49f1a';
+      ctx.shadowBlur = 10;
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+    }
+
+    // 7. Draw click ripple (if active)
+    if (ripple && Date.now() - ripple.time < 500) {
+      const elapsed = Date.now() - ripple.time;
+      const radius = (elapsed / 500) * 45;
+      const opacity = 1 - (elapsed / 500);
+      ctx.beginPath();
+      ctx.arc(ripple.x * canvas.width, ripple.y * canvas.height, radius, 0, 2 * Math.PI);
+      ctx.strokeStyle = `rgba(212, 159, 26, ${opacity})`;
+      ctx.lineWidth = 3.5;
+      ctx.stroke();
+    }
   };
 
-  // Triangulation-Based Projective Transform Math
   const drawWarpedTexture = (
-    ctx: CanvasRenderingContext2D,
     canvasWidth: number,
     canvasHeight: number,
     texture: HTMLImageElement,
-    offset: number
-  ) => {
-    // Map normalized coordinates of handles to actual pixel coordinates
+    offset: number,
+    points: Point[]
+  ): HTMLCanvasElement | null => {
     const p0 = { x: points[0].x * canvasWidth, y: points[0].y * canvasHeight };
     const p1 = { x: points[1].x * canvasWidth, y: points[1].y * canvasHeight };
     const p2 = { x: points[2].x * canvasWidth, y: points[2].y * canvasHeight };
     const p3 = { x: points[3].x * canvasWidth, y: points[3].y * canvasHeight };
 
-    // Offscreen canvas for rendering the texture before blending
     const offscreen = document.createElement('canvas');
     offscreen.width = canvasWidth;
     offscreen.height = canvasHeight;
     const octx = offscreen.getContext('2d');
-    if (!octx) return;
+    if (!octx) return null;
 
-    // Divide the texture into a grid of NxN cells (higher N = more precise perspective)
     const N = 16;
-    
-    // Shift source coordinates by offset percentage to simulate batch selections
     const shiftX = (offset / 300) * texture.width;
     const shiftY = (offset / 300) * texture.height;
     
-    // Helper: Bilinear interpolation to map normalized grid coordinates (u, v) to the screen quadrilateral
     const getDestPoint = (u: number, v: number) => {
       const x = (1 - u) * (1 - v) * p0.x + u * (1 - v) * p1.x + u * v * p2.x + (1 - u) * v * p3.x;
       const y = (1 - u) * (1 - v) * p0.y + u * (1 - v) * p1.y + u * v * p2.y + (1 - u) * v * p3.y;
       return { x, y };
     };
 
-    // Loop through the grid cells
     for (let i = 0; i < N; i++) {
       for (let j = 0; j < N; j++) {
-        // Grid corners in normalized (0 to 1) space
         const u0 = i / N;
         const u1 = (i + 1) / N;
         const v0 = j / N;
         const v1 = (j + 1) / N;
 
-        // Source coordinates on the texture (pixel values)
-        // Crop scale factor (0.7) prevents shifting beyond borders
         const tx0 = u0 * (texture.width * 0.7) + shiftX;
         const tx1 = u1 * (texture.width * 0.7) + shiftX;
         const ty0 = v0 * (texture.height * 0.7) + shiftY;
         const ty1 = v1 * (texture.height * 0.7) + shiftY;
 
-        // Destination coordinates on the screen
         const d00 = getDestPoint(u0, v0);
         const d10 = getDestPoint(u1, v0);
         const d11 = getDestPoint(u1, v1);
         const d01 = getDestPoint(u0, v1);
 
-        // Triangle A
         drawTriangleAffine(octx, texture, 
           tx0, ty0, tx1, ty0, tx0, ty1,
           d00.x, d00.y, d10.x, d10.y, d01.x, d01.y
         );
 
-        // Triangle B
         drawTriangleAffine(octx, texture,
           tx1, ty0, tx1, ty1, tx0, ty1,
           d10.x, d10.y, d11.x, d11.y, d01.x, d01.y
         );
       }
     }
-
-    // Realism Pass: Layering the texture on top of the original shadows
-    ctx.save();
-    
-    // Clip the drawing area to the exact floor boundary to prevent bleeding
-    ctx.beginPath();
-    ctx.moveTo(p0.x, p0.y);
-    ctx.lineTo(p1.x, p1.y);
-    ctx.lineTo(p2.x, p2.y);
-    ctx.lineTo(p3.x, p3.y);
-    ctx.closePath();
-    ctx.clip();
-
-    // Draw the warped texture first at 100% opacity
-    ctx.globalAlpha = 1.0;
-    ctx.drawImage(offscreen, 0, 0);
-
-    // Apply the original shadows back on top using the Multiply blend mode
-    ctx.globalCompositeOperation = 'multiply';
-    ctx.globalAlpha = 0.35;
-    ctx.drawImage(backgroundImageRef.current!, 0, 0, canvasWidth, canvasHeight);
-
-    ctx.restore();
+    return offscreen;
   };
 
-  // Helper: Computes and draws a single affine triangle transform from texture to canvas
   const drawTriangleAffine = (
     ctx: CanvasRenderingContext2D,
     img: HTMLImageElement,
@@ -332,8 +622,7 @@ export default function VisualizerClient() {
     ctx.restore();
   };
 
-  // Draw wireframe borders and corner drag handles
-  const drawGuides = (ctx: CanvasRenderingContext2D, w: number, h: number) => {
+  const drawGuides = (ctx: CanvasRenderingContext2D, w: number, h: number, points: Point[]) => {
     const p0 = { x: points[0].x * w, y: points[0].y * h };
     const p1 = { x: points[1].x * w, y: points[1].y * h };
     const p2 = { x: points[2].x * w, y: points[2].y * h };
@@ -346,11 +635,11 @@ export default function VisualizerClient() {
     ctx.lineTo(p2.x, p2.y);
     ctx.lineTo(p3.x, p3.y);
     ctx.closePath();
-    ctx.lineWidth = 2;
+    ctx.lineWidth = 2.5;
     ctx.strokeStyle = 'rgba(212, 159, 26, 0.9)'; // Angel gold
     ctx.stroke();
 
-    ctx.fillStyle = 'rgba(212, 159, 26, 0.04)';
+    ctx.fillStyle = 'rgba(212, 159, 26, 0.05)';
     ctx.fill();
 
     // 2. Draw corner handles
@@ -374,10 +663,9 @@ export default function VisualizerClient() {
     });
   };
 
-  // Handle mouse/touch drag triggers
   const getMouseCoord = (e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
-    if (!canvas) return { x: 0, y: 0 };
+    if (!canvas) return null;
     const rect = canvas.getBoundingClientRect();
     
     let clientX = 0;
@@ -399,11 +687,11 @@ export default function VisualizerClient() {
   };
 
   const handleStartDrag = (e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
-    if (viewMode === 'before') return;
+    if (viewMode === 'before' || isScanning) return;
     const coord = getMouseCoord(e);
     if (!coord) return;
 
-    // Check if clicking near the vertical split divider in comparison mode
+    // Check if dragging compare split slider
     if (compareMode) {
       const thresholdX = 0.035;
       if (Math.abs(coord.x - splitX) < thresholdX) {
@@ -412,21 +700,54 @@ export default function VisualizerClient() {
       }
     }
 
-    // Detect closest corner point handle
-    const threshold = 0.04;
-    let closestIdx: number | null = null;
-    let minDist = Infinity;
+    // Check active region's corner handles
+    if (activeRegionId) {
+      const activeReg = maskedRegions.find(r => r.id === activeRegionId);
+      if (activeReg) {
+        const threshold = 0.04;
+        let closestIdx: number | null = null;
+        let minDist = Infinity;
 
-    points.forEach((p, idx) => {
-      const dist = Math.hypot(p.x - coord.x, p.y - coord.y);
-      if (dist < threshold && dist < minDist) {
-        minDist = dist;
-        closestIdx = idx;
+        activeReg.points.forEach((p, idx) => {
+          const dist = Math.hypot(p.x - coord.x, p.y - coord.y);
+          if (dist < threshold && dist < minDist) {
+            minDist = dist;
+            closestIdx = idx;
+          }
+        });
+
+        if (closestIdx !== null) {
+          setActivePoint(closestIdx);
+          return;
+        }
       }
-    });
+    }
 
-    if (closestIdx !== null) {
-      setActivePoint(closestIdx);
+    // Clicked outside handles -> select region or create new segment
+    if (backgroundImageRef.current) {
+      const x = Math.round(coord.x * backgroundImageRef.current.naturalWidth);
+      const y = Math.round(coord.y * backgroundImageRef.current.naturalHeight);
+      
+      let clickedRegionId: string | null = null;
+      for (const region of maskedRegions) {
+        if (region.maskCanvas) {
+          const mCtx = region.maskCanvas.getContext('2d');
+          if (mCtx) {
+            const alpha = mCtx.getImageData(x, y, 1, 1).data[3];
+            if (alpha > 0) {
+              clickedRegionId = region.id;
+              break;
+            }
+          }
+        }
+      }
+      
+      if (clickedRegionId) {
+        setActiveRegionId(clickedRegionId);
+      } else {
+        // Run flood fill to segment clicked wall
+        triggerSegmentation(coord.x, coord.y, selectedProduct);
+      }
     }
   };
 
@@ -439,17 +760,19 @@ export default function VisualizerClient() {
       return;
     }
 
-    if (activePoint === null) return;
+    if (activePoint === null || !activeRegionId) return;
 
-    // Keep handles inside canvas boundaries
     const newX = Math.max(0.01, Math.min(0.99, coord.x));
     const newY = Math.max(0.01, Math.min(0.99, coord.y));
 
-    setPoints(prev => {
-      const next = [...prev];
-      next[activePoint] = { x: newX, y: newY };
-      return next;
-    });
+    setMaskedRegions(prev => prev.map(reg => {
+      if (reg.id === activeRegionId) {
+        const nextPoints = [...reg.points];
+        nextPoints[activePoint] = { x: newX, y: newY };
+        return { ...reg, points: nextPoints };
+      }
+      return reg;
+    }));
   };
 
   const handleEndDrag = () => {
@@ -457,7 +780,6 @@ export default function VisualizerClient() {
     setIsDraggingSplit(false);
   };
 
-  // Custom image upload processing
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -472,59 +794,300 @@ export default function VisualizerClient() {
     reader.onload = (event) => {
       const dataUrl = event.target?.result as string;
       setSelectedRoom(dataUrl);
-      // Reset handles to default plane
-      setPoints([
-        { x: 0.25, y: 0.55 },
-        { x: 0.75, y: 0.55 },
-        { x: 0.85, y: 0.85 },
-        { x: 0.15, y: 0.85 },
-      ]);
     };
     reader.readAsDataURL(file);
   };
 
-  // Reset handles to default boundaries
-  const handleResetPoints = () => {
-    setPoints([
-      { x: 0.2, y: 0.6 },
-      { x: 0.8, y: 0.6 },
-      { x: 0.9, y: 0.85 },
-      { x: 0.1, y: 0.85 },
-    ]);
+  const handleDeleteRegion = (id: string) => {
+    setMaskedRegions(prev => prev.filter(r => r.id !== id));
+    if (activeRegionId === id) {
+      setActiveRegionId(null);
+    }
   };
 
-  // Download composite output file
+  const handleResetPoints = () => {
+    if (activeRegionId) {
+      setMaskedRegions(prev => prev.map(reg => {
+        if (reg.id === activeRegionId) {
+          if (reg.maskCanvas) {
+            const bbox = getMaskBoundingBox(reg.maskCanvas);
+            return {
+              ...reg,
+              points: [
+                { x: bbox.minX, y: bbox.minY },
+                { x: bbox.maxX, y: bbox.minY },
+                { x: bbox.maxX, y: bbox.maxY },
+                { x: bbox.minX, y: bbox.maxY },
+              ]
+            };
+          }
+        }
+        return reg;
+      }));
+    } else {
+      setMaskedRegions([]);
+      setActiveRegionId(null);
+    }
+  };
+
+  const triggerSegmentation = async (u: number, v: number, product: Product) => {
+    const bgImg = backgroundImageRef.current;
+    if (!bgImg || !samModelRef.current || !samProcessorRef.current) return;
+    
+    const cacheKey = bgImg.src;
+    const cached = samEmbeddingsCacheRef.current.get(cacheKey);
+    if (!cached) return;
+
+    const x = Math.round(u * bgImg.naturalWidth);
+    const y = Math.round(v * bgImg.naturalHeight);
+    
+    if (x < 0 || x >= bgImg.naturalWidth || y < 0 || y >= bgImg.naturalHeight) return;
+    
+    // Trigger ripple animation at click point
+    setRipple({ x: u, y: v, time: Date.now() });
+
+    try {
+      const model = samModelRef.current;
+      const processor = samProcessorRef.current;
+
+      // Format input points for SAM: [[[[x, y]]]] (4D) and labels: [[[1]]] (3D)
+      const input_points = [[[[x, y]]]];
+      const input_labels = [[[1]]];
+
+      // Prepare prompts using processor (using positional arguments)
+      const prompt_inputs = await processor(cached.rawImage, input_points, input_labels);
+
+      // Run decoder inference
+      const outputs = await model({
+        ...cached.embeddings,
+        ...prompt_inputs,
+      });
+
+      // Post-process the masks to recover original sizes
+      const masks = await processor.post_process_masks(
+        outputs.pred_masks,
+        cached.inputs.original_sizes,
+        cached.inputs.reshaped_input_sizes
+      );
+
+      // Determine the best mask index based on IoU score
+      let bestMaskIdx = 0;
+      if (outputs.iou_scores) {
+        const scores = outputs.iou_scores.data;
+        let maxScore = -Infinity;
+        for (let i = 0; i < scores.length; i++) {
+          if (scores[i] > maxScore) {
+            maxScore = scores[i];
+            bestMaskIdx = i;
+          }
+        }
+      }
+
+      const maskTensor = masks[0];
+      const maskWidth = maskTensor.dims[3];
+      const maskHeight = maskTensor.dims[2];
+
+      const maskCanvas = createMaskCanvasFromTensor(maskTensor, bestMaskIdx, maskWidth, maskHeight);
+      const bbox = getMaskBoundingBox(maskCanvas);
+
+      const newRegionId = 'region-' + Date.now();
+      const newRegion: MaskedRegion = {
+        id: newRegionId,
+        name: `Region ${maskedRegions.length + 1}`,
+        seedPoint: { x: u, y: v },
+        maskCanvas: maskCanvas,
+        product: product,
+        points: [
+          { x: bbox.minX, y: bbox.minY },
+          { x: bbox.maxX, y: bbox.minY },
+          { x: bbox.maxX, y: bbox.maxY },
+          { x: bbox.minX, y: bbox.maxY },
+        ],
+        opacity: 1.0,
+      };
+
+      setMaskedRegions(prev => [...prev, newRegion]);
+      setActiveRegionId(newRegionId);
+
+    } catch (err) {
+      console.error("SAM decoding/inference failed:", err);
+      setUploadError("AI failed to segment the clicked point. Please try again.");
+    }
+  };
+
+  // Drag Swatch Handlers
+  const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    if (isScanning || !hasAnalyzed) return;
+    
+    const rect = canvasRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    
+    const u = (e.clientX - rect.left) / rect.width;
+    const v = (e.clientY - rect.top) / rect.height;
+    
+    if (backgroundImageRef.current) {
+      const x = Math.round(u * backgroundImageRef.current.naturalWidth);
+      const y = Math.round(v * backgroundImageRef.current.naturalHeight);
+      
+      let foundRegionId: string | null = null;
+      for (const region of maskedRegions) {
+        if (region.maskCanvas) {
+          const mCtx = region.maskCanvas.getContext('2d');
+          if (mCtx) {
+            const alpha = mCtx.getImageData(x, y, 1, 1).data[3];
+            if (alpha > 0) {
+              foundRegionId = region.id;
+              break;
+            }
+          }
+        }
+      }
+      setHoveredRegionId(foundRegionId);
+    }
+  };
+
+  const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    setHoveredRegionId(null);
+    if (isScanning || !hasAnalyzed) return;
+    
+    const slug = e.dataTransfer.getData('text/plain');
+    const droppedProduct = PRODUCTS.find(p => p.slug === slug);
+    if (!droppedProduct) return;
+    
+    const rect = canvasRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    
+    const u = (e.clientX - rect.left) / rect.width;
+    const v = (e.clientY - rect.top) / rect.height;
+    
+    if (backgroundImageRef.current) {
+      const x = Math.round(u * backgroundImageRef.current.naturalWidth);
+      const y = Math.round(v * backgroundImageRef.current.naturalHeight);
+      
+      let targetRegionId: string | null = null;
+      for (const region of maskedRegions) {
+        if (region.maskCanvas) {
+          const mCtx = region.maskCanvas.getContext('2d');
+          if (mCtx) {
+            const alpha = mCtx.getImageData(x, y, 1, 1).data[3];
+            if (alpha > 0) {
+              targetRegionId = region.id;
+              break;
+            }
+          }
+        }
+      }
+      
+      if (targetRegionId) {
+        // Drop on existing region -> apply texture
+        setMaskedRegions(prev => prev.map(reg => {
+          if (reg.id === targetRegionId) {
+            return { ...reg, product: droppedProduct };
+          }
+          return reg;
+        }));
+        setActiveRegionId(targetRegionId);
+      } else {
+        // Drop on unsegmented wall -> auto segment + apply texture
+        triggerSegmentation(u, v, droppedProduct);
+      }
+    }
+  };
+
+  const handleProductSelect = (prod: Product) => {
+    setSelectedProduct(prod);
+    if (activeRegionId) {
+      setMaskedRegions(prev => prev.map(reg => {
+        if (reg.id === activeRegionId) {
+          return { ...reg, product: prod };
+        }
+        return reg;
+      }));
+    }
+  };
+
   const handleDownload = () => {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
-    // Temporarily draw without handles to download clean composite
-    const prevView = viewMode;
-    setViewMode('after');
-    const bgImg = backgroundImageRef.current;
-    const texImg = textureImageRef.current;
-    const ctx = canvas.getContext('2d');
+    // Temporarily hide active guides
+    const tempActiveId = activeRegionId;
+    setActiveRegionId(null);
     
-    if (ctx && bgImg && texImg) {
-      // Draw base
-      ctx.drawImage(bgImg, 0, 0, canvas.width, canvas.height);
-      // Draw textures
-      if (compareMode && compareTextureImageRef.current) {
-        ctx.save();
-        ctx.beginPath();
-        ctx.rect(0, 0, canvas.width * splitX, canvas.height);
-        ctx.clip();
-        drawWarpedTexture(ctx, canvas.width, canvas.height, texImg, lotOffset);
-        ctx.restore();
+    const bgImg = backgroundImageRef.current;
+    if (bgImg) {
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        ctx.drawImage(bgImg, 0, 0, canvas.width, canvas.height);
+        
+        if (viewMode === 'after' && isWarping) {
+          maskedRegions.forEach((region) => {
+            const texImg = loadedTextures[region.product.slug];
+            if (!texImg) return;
+            
+            const offscreenCanvas = drawWarpedTexture(canvas.width, canvas.height, texImg, lotOffset, region.points);
+            if (!offscreenCanvas) return;
+            
+            const tempCanvas = document.createElement('canvas');
+            tempCanvas.width = canvas.width;
+            tempCanvas.height = canvas.height;
+            const tempCtx = tempCanvas.getContext('2d');
+            if (tempCtx) {
+              tempCtx.drawImage(offscreenCanvas, 0, 0);
+              tempCtx.globalCompositeOperation = 'destination-in';
+              tempCtx.drawImage(region.maskCanvas, 0, 0, canvas.width, canvas.height);
+              
+              ctx.save();
+              if (compareMode && loadedTextures[compareProduct.slug]) {
+                const compareTexImg = loadedTextures[compareProduct.slug];
+                const offscreenCompare = drawWarpedTexture(canvas.width, canvas.height, compareTexImg, 0, region.points);
+                if (offscreenCompare) {
+                  const tempCanvasCompare = document.createElement('canvas');
+                  tempCanvasCompare.width = canvas.width;
+                  tempCanvasCompare.height = canvas.height;
+                  const tempCtxCompare = tempCanvasCompare.getContext('2d');
+                  if (tempCtxCompare) {
+                    tempCtxCompare.drawImage(offscreenCompare, 0, 0);
+                    tempCtxCompare.globalCompositeOperation = 'destination-in';
+                    tempCtxCompare.drawImage(region.maskCanvas, 0, 0, canvas.width, canvas.height);
+                  }
+                  
+                  ctx.save();
+                  ctx.beginPath();
+                  ctx.rect(0, 0, canvas.width * splitX, canvas.height);
+                  ctx.clip();
+                  ctx.globalAlpha = region.opacity;
+                  ctx.drawImage(tempCanvas, 0, 0);
+                  ctx.globalCompositeOperation = 'multiply';
+                  ctx.globalAlpha = 0.35 * region.opacity;
+                  ctx.drawImage(bgImg, 0, 0, canvas.width, canvas.height);
+                  ctx.restore();
 
-        ctx.save();
-        ctx.beginPath();
-        ctx.rect(canvas.width * splitX, 0, canvas.width * (1 - splitX), canvas.height);
-        ctx.clip();
-        drawWarpedTexture(ctx, canvas.width, canvas.height, compareTextureImageRef.current, 0);
-        ctx.restore();
-      } else {
-        drawWarpedTexture(ctx, canvas.width, canvas.height, texImg, lotOffset);
+                  ctx.save();
+                  ctx.beginPath();
+                  ctx.rect(canvas.width * splitX, 0, canvas.width * (1 - splitX), canvas.height);
+                  ctx.clip();
+                  ctx.globalAlpha = region.opacity;
+                  ctx.drawImage(tempCanvasCompare, 0, 0);
+                  ctx.globalCompositeOperation = 'multiply';
+                  ctx.globalAlpha = 0.35 * region.opacity;
+                  ctx.drawImage(bgImg, 0, 0, canvas.width, canvas.height);
+                  ctx.restore();
+                }
+              } else {
+                ctx.globalAlpha = region.opacity;
+                ctx.drawImage(tempCanvas, 0, 0);
+                
+                ctx.globalCompositeOperation = 'multiply';
+                ctx.globalAlpha = 0.35 * region.opacity;
+                ctx.drawImage(bgImg, 0, 0, canvas.width, canvas.height);
+              }
+              ctx.restore();
+            }
+          });
+        }
       }
       
       const dataUrl = canvas.toDataURL('image/jpeg', 0.95);
@@ -533,14 +1096,12 @@ export default function VisualizerClient() {
       link.href = dataUrl;
       link.click();
       
-      // Restore wireframe view
-      drawCanvas();
+      setActiveRegionId(tempActiveId);
     }
   };
 
-  // Sourcing Estimate Calculations
+  // Estimate calculations
   const calculateEstimateRange = (product: Product) => {
-    // Parse priceRange e.g., "₹250 - ₹800 per sq ft" or "₹8,500 - ₹22,000 per unit"
     const numbers = product.priceRange.replace(/[^0-9-]/g, '').split('-');
     const min = parseInt(numbers[0] || '100', 10);
     const max = parseInt(numbers[1] || '500', 10);
@@ -549,11 +1110,8 @@ export default function VisualizerClient() {
     const subtotalMin = totalAreaNeeded * min;
     const subtotalMax = totalAreaNeeded * max;
 
-    // GST (18%)
     const gstMin = subtotalMin * 0.18;
     const gstMax = subtotalMax * 0.18;
-
-    // Fixed Loading + Handling
     const handling = 4500;
 
     return {
@@ -570,7 +1128,6 @@ export default function VisualizerClient() {
     };
   };
 
-  // Prefilled WhatsApp Enquiry Message (Standard Sourcing Request)
   const waEnquiryUrl = () => {
     const msg = encodeURIComponent(
       `Hi Angel Tiles Jodhpur, I previewed the ${selectedProduct.name} slab (Active Lot: ${selectedLot.toUpperCase()}) inside your Room Visualizer and would like to coordinate a quote request.`
@@ -578,7 +1135,6 @@ export default function VisualizerClient() {
     return `https://wa.me/918147941542?text=${msg}`;
   };
 
-  // Sourcing Quote WhatsApp message
   const waQuoteUrl = () => {
     const calc = calculateEstimateRange(selectedProduct);
     const rangeText = selectedProduct.category === 'sanitaryware' ? 'units' : 'sq ft';
@@ -594,7 +1150,6 @@ export default function VisualizerClient() {
     return `https://wa.me/918147941542?text=${msg}`;
   };
 
-  // AI Consultant message sender
   const handleConsultantSend = (text: string) => {
     if (!text.trim()) return;
 
@@ -609,7 +1164,7 @@ export default function VisualizerClient() {
       let matchedProds: Product[] = [];
 
       if (lower.includes('kitchen') || lower.includes('countertop') || lower.includes('island')) {
-        responseText = "For kitchen countertops and islands, I highly recommend our high-density Brazil/Rajasthan granites. They are non-porous (stain repellent) and offer extreme heat resistance. Take a look at these materials:";
+        responseText = "For kitchen countertops and islands, I highly recommend our high-density granites. They are non-porous (stain repellent) and offer extreme heat resistance. Take a look at these materials:";
         matchedProds = PRODUCTS.filter(p => p.category === 'granite');
       } else if (lower.includes('bathroom') || lower.includes('bath') || lower.includes('wash') || lower.includes('toilet') || lower.includes('basin')) {
         responseText = "For luxury bathrooms and powder rooms, combining tabletop basins and rimless closets with high-definition PGVT marble-look wall tiles creates a cohesive boutique feel. Here are my recommendations:";
@@ -621,7 +1176,7 @@ export default function VisualizerClient() {
         responseText = "If you want an elite look at a highly competitive rate, our vitrified floor tiles are exceptional options. Sourced from Morbi, Gujarat, they require zero resealing. Take a look at these options:";
         matchedProds = PRODUCTS.filter(p => p.slug === 'polished-glazed-vitrified-tiles' || p.slug === 'double-charge-vitrified-tiles' || p.slug === 'jodhpur-red-granite');
       } else if (lower.includes('white') || lower.includes('light')) {
-        responseText = "To achieve an open, highly-reflective visual aesthetic, these white marbles and frosty white granites are ideal:";
+        responseText = "To achieve an open, highly-reflective visual aesthetic, these white marbles and granites are ideal:";
         matchedProds = PRODUCTS.filter(p => p.slug === 'makrana-white-marble' || p.slug === 'italian-statuario-marble' || p.slug === 'alaska-white-granite' || p.slug === 'carrara-white-marble');
       } else if (lower.includes('black') || lower.includes('dark')) {
         responseText = "Dark materials offer rich textures. Our Rajasthan Black Granite is a dense, high-compressive stone that delivers a sleek mirror-like finish:";
@@ -641,6 +1196,10 @@ export default function VisualizerClient() {
       setIsTyping(false);
     }, 1100);
   };
+
+  const currentActiveProduct = activeRegionId 
+    ? maskedRegions.find(r => r.id === activeRegionId)?.product 
+    : selectedProduct;
 
   const calcResult = calculateEstimateRange(selectedProduct);
 
@@ -691,17 +1250,16 @@ export default function VisualizerClient() {
             <button
               onClick={() => setViewMode(viewMode === 'after' ? 'before' : 'after')}
               className="inline-flex items-center gap-2 px-4 py-2.5 bg-stone-900 border border-stone-800 text-xs font-bold uppercase tracking-wider rounded-lg text-white hover:bg-stone-850 transition-colors"
-              data-cursor="view"
             >
               <Eye className="w-4 h-4 text-gold-400" />
               <span>{viewMode === 'after' ? 'Show Before' : 'Show After'}</span>
             </button>
 
-            {/* Reset handles */}
+            {/* Reset handles / clear regions */}
             <button
               onClick={handleResetPoints}
               className="inline-flex items-center gap-2 px-4 py-2.5 bg-stone-900/50 border border-stone-900 text-xs font-bold uppercase tracking-wider rounded-lg text-stone-400 hover:text-white hover:bg-stone-900 transition-colors"
-              title="Reset Handles"
+              title={activeRegionId ? "Reset Current Handles" : "Clear All Regions"}
             >
               <RotateCcw className="w-4 h-4" />
             </button>
@@ -715,11 +1273,14 @@ export default function VisualizerClient() {
           <div className="lg:col-span-2 flex flex-col gap-4">
             <div 
               ref={containerRef}
+              onDragOver={handleDragOver}
+              onDrop={handleDrop}
+              onDragLeave={() => setHoveredRegionId(null)}
               className="relative w-full rounded-xl overflow-hidden border border-stone-850 bg-stone-950 shadow-2xl select-none touch-none"
             >
               <canvas
                 ref={canvasRef}
-                className="block mx-auto cursor-pointer"
+                className="block mx-auto cursor-crosshair"
                 onMouseDown={handleStartDrag}
                 onMouseMove={handleDrag}
                 onMouseUp={handleEndDrag}
@@ -734,12 +1295,10 @@ export default function VisualizerClient() {
             <div className="p-4 bg-gold-400/5 border border-gold-400/10 rounded-lg text-xs leading-relaxed text-stone-400 flex gap-3">
               <Sparkles className="w-5 h-5 text-gold-400 shrink-0" />
               <div>
-                <span className="font-bold text-white uppercase tracking-wider block mb-1">Perspective Guide & Split comparison</span>
-                {compareMode ? (
-                  <span>Drag the vertical white slider on the canvas to compare materials. Adjust the four gold corner handles to warp textures dynamically.</span>
-                ) : (
-                  <span>Drag the four gold circle handles to outline the boundaries of your floor or wall. Select any stone material on the right to warp it in.</span>
-                )}
+                <span className="font-bold text-white uppercase tracking-wider block mb-1">Smart Wall Detection & Drag-and-Drop Swatches</span>
+                <span>
+                  Tap anywhere on a wall or floor to segment a region. Drag swatches from the sidebar and drop them onto segmented regions to apply materials, or tap a region and select a swatch. Drag the four corner handles to align perspective.
+                </span>
               </div>
             </div>
           </div>
@@ -787,19 +1346,133 @@ export default function VisualizerClient() {
               </div>
             </div>
 
-            {/* 2. Main Material Selection */}
+            {/* 2. Active Regions Panel */}
+            <div className="border border-stone-900 rounded-xl p-6 bg-stone-900/10">
+              <h3 className="text-xs font-bold uppercase tracking-widest text-white mb-4 border-b border-stone-900 pb-3 flex justify-between items-center">
+                <span>2. Active Regions</span>
+                {maskedRegions.length > 0 && (
+                  <button 
+                    onClick={() => {
+                      setMaskedRegions([]);
+                      setActiveRegionId(null);
+                    }}
+                    className="text-[10px] text-stone-500 hover:text-white uppercase font-bold tracking-wider transition-colors"
+                  >
+                    Clear All
+                  </button>
+                )}
+              </h3>
+
+              {isScanning ? (
+                <div className="flex flex-col items-center justify-center py-6 text-stone-500 gap-3">
+                  <Loader2 className="w-6 h-6 animate-spin text-gold-400" />
+                  <span className="text-[10px] uppercase font-bold tracking-wider animate-pulse">{scanMessage}</span>
+                  <div className="w-full bg-stone-950 rounded-full h-1 max-w-[200px] overflow-hidden border border-stone-850">
+                    <div 
+                      className="bg-gold-400 h-full rounded-full transition-all duration-300 ease-out" 
+                      style={{ width: `${scanProgress}%` }}
+                    />
+                  </div>
+                </div>
+              ) : maskedRegions.length === 0 ? (
+                <div className="text-center py-6 text-stone-500 text-[11px] leading-relaxed">
+                  <Sparkles className="w-5 h-5 text-gold-400/40 mx-auto mb-2" />
+                  Tap anywhere on the room photo to segment a wall/floor region and apply textures.
+                </div>
+              ) : (
+                <div className="flex flex-col gap-3.5 max-h-[220px] overflow-y-auto pr-2">
+                  {maskedRegions.map((region) => {
+                    const isActive = region.id === activeRegionId;
+                    return (
+                      <div 
+                        key={region.id}
+                        onClick={() => setActiveRegionId(region.id)}
+                        className={`p-3 rounded-lg border transition-all cursor-pointer ${
+                          isActive 
+                            ? 'border-gold-400 bg-gold-400/5' 
+                            : 'border-stone-900 bg-stone-950/20 hover:border-stone-800'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-3 mb-2">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <div className="w-2 h-2 rounded-full bg-gold-400 shrink-0" />
+                            <span className="text-[10px] text-white font-bold truncate uppercase tracking-wider">{region.name}</span>
+                          </div>
+                          <button 
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleDeleteRegion(region.id);
+                            }}
+                            className="text-stone-500 hover:text-red-400 transition-colors p-1"
+                            title="Remove Region"
+                          >
+                            <X className="w-4 h-4" />
+                          </button>
+                        </div>
+
+                        <div className="flex items-center gap-3 bg-stone-950 p-2 rounded border border-stone-900/60 mb-2">
+                          <div className="relative w-8 h-8 rounded overflow-hidden bg-stone-900 shrink-0">
+                            <Image 
+                              src={region.product.texture} 
+                              alt={region.product.name} 
+                              fill
+                              className="object-cover"
+                              sizes="32px"
+                            />
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <span className="text-[9px] text-stone-300 font-bold block truncate">{region.product.name}</span>
+                            <span className="text-[8px] text-gold-400 font-bold block mt-0.5">{region.product.priceRange}</span>
+                          </div>
+                        </div>
+
+                        {/* Opacity slider */}
+                        <div className="flex flex-col gap-1.5" onClick={e => e.stopPropagation()}>
+                          <div className="flex justify-between text-[8px] text-stone-500 uppercase tracking-widest font-bold">
+                            <span>Material Opacity</span>
+                            <span className="font-mono text-stone-300">{Math.round(region.opacity * 100)}%</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-[8px] text-stone-600 font-bold">65%</span>
+                            <input
+                              type="range"
+                              min="0.65"
+                              max="1.0"
+                              step="0.01"
+                              value={region.opacity}
+                              onChange={(e) => {
+                                const val = parseFloat(e.target.value);
+                                setMaskedRegions(prev => prev.map(r => r.id === region.id ? { ...r, opacity: val } : r));
+                              }}
+                              className="flex-1 h-1 bg-stone-900 rounded-lg appearance-none cursor-pointer accent-gold-400"
+                            />
+                            <span className="text-[8px] text-stone-600 font-bold">100%</span>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* 3. Main Material Selection */}
             <div className="border border-stone-900 rounded-xl p-6 bg-stone-900/10">
               <h3 className="text-xs font-bold uppercase tracking-widest text-white mb-4 border-b border-stone-900 pb-3">
-                {compareMode ? '2. Select Material A (Left Side)' : '2. Choose Stone Material'}
+                {compareMode ? '3. Select Material A (Left Side)' : '3. Choose Stone Material'}
               </h3>
               
               <div className="flex flex-col gap-2.5 max-h-[190px] overflow-y-auto pr-2">
                 {PRODUCTS.map((prod) => (
                   <button
                     key={prod.slug}
-                    onClick={() => setSelectedProduct(prod)}
-                    className={`flex items-center gap-3 p-2 rounded-lg border text-left transition-all ${
-                      selectedProduct.slug === prod.slug
+                    draggable
+                    onDragStart={(e) => {
+                      e.dataTransfer.setData('text/plain', prod.slug);
+                    }}
+                    onClick={() => handleProductSelect(prod)}
+                    className={`flex items-center gap-3 p-2 rounded-lg border text-left transition-all cursor-grab active:cursor-grabbing ${
+                      currentActiveProduct?.slug === prod.slug
                         ? 'border-gold-400 bg-gold-400/5'
                         : 'border-stone-900 hover:border-stone-850'
                     }`}
@@ -821,7 +1494,7 @@ export default function VisualizerClient() {
                         {prod.priceRange}
                       </span>
                     </div>
-                    {selectedProduct.slug === prod.slug && (
+                    {currentActiveProduct?.slug === prod.slug && (
                       <div className="w-4 h-4 rounded-full bg-gold-400 flex items-center justify-center text-stone-950">
                         <Check className="w-3 stroke-[3]" />
                       </div>
@@ -861,11 +1534,11 @@ export default function VisualizerClient() {
               </div>
             </div>
 
-            {/* 3. Compare Material Selection (Only visible if compareMode is active) */}
+            {/* 4. Compare Material Selection (Only visible if compareMode is active) */}
             {compareMode && (
               <div className="border border-gold-500/20 rounded-xl p-6 bg-stone-900/10 animate-in slide-in-from-top duration-300">
                 <h3 className="text-xs font-bold uppercase tracking-widest text-gold-400 mb-4 border-b border-stone-900 pb-3">
-                  3. Select Material B (Right Side)
+                  4. Select Compare Material (Right Side)
                 </h3>
                 
                 <div className="flex flex-col gap-2.5 max-h-[190px] overflow-y-auto pr-2">
@@ -907,7 +1580,7 @@ export default function VisualizerClient() {
               </div>
             )}
 
-            {/* 4. Output Actions */}
+            {/* 5. Output Actions */}
             <div className="flex flex-col gap-2.5">
               {/* Sourcing Estimate Button */}
               <button
@@ -921,7 +1594,6 @@ export default function VisualizerClient() {
               <button
                 onClick={handleDownload}
                 className="w-full inline-flex items-center justify-center gap-2.5 px-8 py-3.5 bg-stone-900 border border-stone-850 text-white hover:bg-stone-850 hover:border-stone-750 transition-colors font-bold text-xs uppercase tracking-widest rounded-full"
-                data-cursor="save"
               >
                 <Download className="w-4 h-4 text-gold-400" />
                 <span>Download Slabs Preview</span>
@@ -932,7 +1604,6 @@ export default function VisualizerClient() {
                 className="w-full inline-flex items-center justify-center gap-2.5 px-8 py-3.5 bg-gradient-to-r from-gold-500 to-gold-600 text-stone-950 font-bold text-xs uppercase tracking-widest rounded-full transition-transform hover:scale-105 shadow-lg shadow-gold-500/20"
                 target="_blank"
                 rel="noopener noreferrer"
-                data-cursor="chat"
               >
                 <Phone className="w-4 h-4" />
                 <span>Enquire Slabs Lot WhatsApp</span>
@@ -1002,7 +1673,6 @@ export default function VisualizerClient() {
 
             {/* Receipt Invoice Sheet */}
             <div className="border border-stone-800 rounded-xl p-6 bg-stone-950 font-mono text-[11px] leading-relaxed relative overflow-hidden">
-              {/* Invoice Crest watermark */}
               <div className="absolute top-4 right-4 text-[9px] uppercase tracking-widest text-stone-800 font-bold border border-stone-850 px-2 py-0.5">
                 Estimator Draft
               </div>
@@ -1078,17 +1748,15 @@ export default function VisualizerClient() {
         </div>
       )}
 
-      {/* B. AI Design Consultant Drawer (Slide-in Panel from Right) */}
+      {/* B. AI Design Consultant Drawer */}
       <AnimatePresence>
         {isConsultantOpen && (
           <>
-            {/* Drawer Backdrop Overlay */}
             <div 
               onClick={() => setIsConsultantOpen(false)}
               className="fixed inset-0 z-40 bg-stone-950/60 backdrop-blur-sm"
             />
 
-            {/* Drawer content panel */}
             <div 
               className="fixed right-0 top-0 bottom-0 z-50 w-full md:w-[450px] bg-stone-900/95 backdrop-blur-xl border-l border-stone-800 flex flex-col justify-between shadow-2xl animate-in slide-in-from-right duration-300"
             >
@@ -1128,7 +1796,6 @@ export default function VisualizerClient() {
                       {msg.text}
                     </div>
 
-                    {/* Matched product recommendation cards */}
                     {msg.products && msg.products.length > 0 && (
                       <div className="flex flex-col gap-2 w-full mt-2">
                         {msg.products.map(p => (
@@ -1149,10 +1816,7 @@ export default function VisualizerClient() {
                               <span className="text-[9px] text-gold-400 font-bold block mt-0.5">{p.priceRange}</span>
                               <div className="flex gap-2 mt-1.5">
                                 <button
-                                  onClick={() => {
-                                    setSelectedProduct(p);
-                                    drawCanvas();
-                                  }}
+                                  onClick={() => handleProductSelect(p)}
                                   className="text-[9px] text-stone-400 hover:text-white transition-colors uppercase font-bold"
                                 >
                                   Apply Material
@@ -1188,7 +1852,6 @@ export default function VisualizerClient() {
 
               {/* Bottom input area */}
               <div className="p-4 border-t border-stone-850 bg-stone-950 flex flex-col gap-3">
-                {/* Suggestions tags */}
                 <div className="flex flex-wrap gap-2">
                   {[
                     "Statuario for Living Room",
@@ -1223,7 +1886,6 @@ export default function VisualizerClient() {
                   </button>
                 </div>
               </div>
-
             </div>
           </>
         )}

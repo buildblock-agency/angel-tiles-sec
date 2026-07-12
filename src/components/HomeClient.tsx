@@ -324,72 +324,84 @@ export default function HomeClient() {
       });
     }
 
-    // Falling header slides from the right
-    gsap.fromTo('header',
-      { xPercent: 30, opacity: 0 },
-      { 
-        xPercent: 0, 
-        opacity: 1, 
-        duration: 1.6, 
-        delay: 0.05, 
-        ease: 'power4.out',
-        clearProps: 'transform'
-      }
-    );
+    // Conditionally play slide-in animations or load instantly on subsequent visits
+    const isSubsequentVisit = typeof window !== 'undefined' && sessionStorage.getItem('hasVisited_angel') === 'true';
 
-    // Main content slides from the right
-    gsap.fromTo('.home-main-content',
-      { xPercent: 30, opacity: 0 },
-      { 
-        xPercent: 0, 
-        opacity: 1, 
-        duration: 1.6, 
-        delay: 0.05, 
-        ease: 'power4.out',
-        clearProps: 'transform',
-        onComplete: () => {
-          ScrollTrigger.refresh();
+    if (isSubsequentVisit) {
+      gsap.set('header', { xPercent: 0, opacity: 1, clearProps: 'transform' });
+      gsap.set('.home-main-content', { xPercent: 0, opacity: 1, clearProps: 'transform' });
+      gsap.set('.hero-reveal-text', { x: 0, opacity: 1 });
+      gsap.set('.hero-fade-in', { x: 0, opacity: 1 });
+      gsap.set('.value-props-strip', { x: 0, opacity: 1 });
+      ScrollTrigger.refresh();
+    } else {
+      // Falling header slides from the right (First Visit)
+      gsap.fromTo('header',
+        { xPercent: 30, opacity: 0 },
+        { 
+          xPercent: 0, 
+          opacity: 1, 
+          duration: 1.6, 
+          delay: 0.05, 
+          ease: 'power4.out',
+          clearProps: 'transform'
         }
-      }
-    );
+      );
 
-    // Staggered Title Animations slide from the right
-    gsap.fromTo('.hero-reveal-text', 
-      { opacity: 0, x: 80 },
-      { 
-        opacity: 1, 
-        x: 0, 
-        duration: 1.4, 
-        delay: 0.2,
-        stagger: 0.1, 
-        ease: 'power4.out' 
-      }
-    );
+      // Main content slides from the right (First Visit)
+      gsap.fromTo('.home-main-content',
+        { xPercent: 30, opacity: 0 },
+        { 
+          xPercent: 0, 
+          opacity: 1, 
+          duration: 1.6, 
+          delay: 0.05, 
+          ease: 'power4.out',
+          clearProps: 'transform',
+          onComplete: () => {
+            ScrollTrigger.refresh();
+          }
+        }
+      );
 
-    // Staggered highlights entry slide from the right
-    gsap.fromTo('.hero-fade-in',
-      { opacity: 0, x: 50 },
-      {
-        opacity: 1,
-        x: 0,
-        duration: 1.3,
-        delay: 0.4,
-        stagger: 0.08,
-        ease: 'power4.out'
-      }
-    );
+      // Staggered Title Animations slide from the right (First Visit)
+      gsap.fromTo('.hero-reveal-text', 
+        { opacity: 0, x: 80 },
+        { 
+          opacity: 1, 
+          x: 0, 
+          duration: 1.4, 
+          delay: 0.2,
+          stagger: 0.1, 
+          ease: 'power4.out' 
+        }
+      );
 
-    // Value props strip slides from the right
-    gsap.fromTo('.value-props-strip',
-      { opacity: 0, x: 80 },
-      {
-        opacity: 1,
-        x: 0,
-        duration: 1.4,
-        delay: 0.3,
-        ease: 'power4.out'
-      }
-    );
+      // Staggered highlights entry slide from the right (First Visit)
+      gsap.fromTo('.hero-fade-in',
+        { opacity: 0, x: 50 },
+        {
+          opacity: 1,
+          x: 0,
+          duration: 1.3,
+          delay: 0.4,
+          stagger: 0.08,
+          ease: 'power4.out'
+        }
+      );
+
+      // Value props strip slides from the right (First Visit)
+      gsap.fromTo('.value-props-strip',
+        { opacity: 0, x: 80 },
+        {
+          opacity: 1,
+          x: 0,
+          duration: 1.4,
+          delay: 0.3,
+          ease: 'power4.out'
+        }
+      );
+    }
 
     // Horizontal Collections Scroll
     const panels = gsap.utils.toArray('.horizontal-panel');
