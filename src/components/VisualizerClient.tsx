@@ -41,6 +41,31 @@ const PRESET_ROOMS = [
   { id: 'wall', name: 'Bath Feature Wall', url: '/presets/preset_bathroom_wall.webp' },
 ];
 
+// --- Image Resizing Helper for Performance/Optimization ---
+const resizeImageToMax = (img: HTMLImageElement, maxDim: number): HTMLCanvasElement => {
+  const canvas = document.createElement('canvas');
+  let width = img.naturalWidth || img.width;
+  let height = img.naturalHeight || img.height;
+
+  if (width > maxDim || height > maxDim) {
+    if (width > height) {
+      height = Math.round((height * maxDim) / width);
+      width = maxDim;
+    } else {
+      width = Math.round((width * maxDim) / height);
+      height = maxDim;
+    }
+  }
+
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d');
+  if (ctx) {
+    ctx.drawImage(img, 0, 0, width, height);
+  }
+  return canvas;
+};
+
 // --- Segment Anything Model (SAM) Tensor to Canvas Helper ---
 
 const createMaskCanvasFromTensor = (
@@ -196,6 +221,9 @@ export default function VisualizerClient() {
     const { SamModel, AutoProcessor, env } = await import('@xenova/transformers');
     
     env.allowLocalModels = false; // Ensure it looks online
+    
+    // Prevent WASM multi-threading OOM crashes on high-core machines
+    env.backends.onnx.wasm.numThreads = 1;
 
     onProgress(30, "Loading SlimSAM Neural Model (15MB)...");
     
@@ -217,6 +245,7 @@ export default function VisualizerClient() {
     setScanProgress(0);
     setScanMessage("Initializing Smart AI Vision Engine...");
     setHasAnalyzed(false);
+    setUploadError(null);
 
     try {
       const { model, processor } = await lazyLoadSam((percent, msg) => {
@@ -239,7 +268,13 @@ export default function VisualizerClient() {
       setScanMessage("Analyzing Room Geometry (SAM Vision Encoder)...");
       
       const { RawImage } = await import('@xenova/transformers');
-      const rawImage = await RawImage.read(img.src);
+      
+      // Downscale image to max 1024px to optimize model inference memory usage
+      const resizedCanvas = resizeImageToMax(img, 1024);
+      const rCtx = resizedCanvas.getContext('2d');
+      if (!rCtx) throw new Error("Failed to get 2d context for resizing");
+      const imageData = rCtx.getImageData(0, 0, resizedCanvas.width, resizedCanvas.height);
+      const rawImage = new RawImage(imageData.data, resizedCanvas.width, resizedCanvas.height, 4);
       
       const inputs = await processor(rawImage);
       const imageEmbeddings = await model.get_image_embeddings(inputs);
@@ -725,14 +760,13 @@ export default function VisualizerClient() {
 
     // Clicked outside handles -> select region or create new segment
     if (backgroundImageRef.current) {
-      const x = Math.round(coord.x * backgroundImageRef.current.naturalWidth);
-      const y = Math.round(coord.y * backgroundImageRef.current.naturalHeight);
-      
       let clickedRegionId: string | null = null;
       for (const region of maskedRegions) {
         if (region.maskCanvas) {
           const mCtx = region.maskCanvas.getContext('2d');
           if (mCtx) {
+            const x = Math.round(coord.x * region.maskCanvas.width);
+            const y = Math.round(coord.y * region.maskCanvas.height);
             const alpha = mCtx.getImageData(x, y, 1, 1).data[3];
             if (alpha > 0) {
               clickedRegionId = region.id;
@@ -838,10 +872,10 @@ export default function VisualizerClient() {
     const cached = samEmbeddingsCacheRef.current.get(cacheKey);
     if (!cached) return;
 
-    const x = Math.round(u * bgImg.naturalWidth);
-    const y = Math.round(v * bgImg.naturalHeight);
+    const x = Math.round(u * cached.rawImage.width);
+    const y = Math.round(v * cached.rawImage.height);
     
-    if (x < 0 || x >= bgImg.naturalWidth || y < 0 || y >= bgImg.naturalHeight) return;
+    if (x < 0 || x >= cached.rawImage.width || y < 0 || y >= cached.rawImage.height) return;
     
     // Trigger ripple animation at click point
     setRipple({ x: u, y: v, time: Date.now() });
@@ -927,14 +961,13 @@ export default function VisualizerClient() {
     const v = (e.clientY - rect.top) / rect.height;
     
     if (backgroundImageRef.current) {
-      const x = Math.round(u * backgroundImageRef.current.naturalWidth);
-      const y = Math.round(v * backgroundImageRef.current.naturalHeight);
-      
       let foundRegionId: string | null = null;
       for (const region of maskedRegions) {
         if (region.maskCanvas) {
           const mCtx = region.maskCanvas.getContext('2d');
           if (mCtx) {
+            const x = Math.round(u * region.maskCanvas.width);
+            const y = Math.round(v * region.maskCanvas.height);
             const alpha = mCtx.getImageData(x, y, 1, 1).data[3];
             if (alpha > 0) {
               foundRegionId = region.id;
@@ -1380,7 +1413,7 @@ export default function VisualizerClient() {
                   Tap anywhere on the room photo to segment a wall/floor region and apply textures.
                 </div>
               ) : (
-                <div className="flex flex-col gap-3.5 max-h-[220px] overflow-y-auto pr-2">
+                <div className="flex flex-col gap-3.5 max-h-[220px] overflow-y-auto pr-2" data-lenis-prevent>
                   {maskedRegions.map((region) => {
                     const isActive = region.id === activeRegionId;
                     return (
@@ -1462,7 +1495,7 @@ export default function VisualizerClient() {
                 {compareMode ? '3. Select Material A (Left Side)' : '3. Choose Stone Material'}
               </h3>
               
-              <div className="flex flex-col gap-2.5 max-h-[190px] overflow-y-auto pr-2">
+              <div className="flex flex-col gap-2.5 max-h-[190px] overflow-y-auto pr-2" data-lenis-prevent>
                 {PRODUCTS.map((prod) => (
                   <button
                     key={prod.slug}
@@ -1541,7 +1574,7 @@ export default function VisualizerClient() {
                   4. Select Compare Material (Right Side)
                 </h3>
                 
-                <div className="flex flex-col gap-2.5 max-h-[190px] overflow-y-auto pr-2">
+                <div className="flex flex-col gap-2.5 max-h-[190px] overflow-y-auto pr-2" data-lenis-prevent>
                   {PRODUCTS.map((prod) => (
                     <button
                       key={`compare-${prod.slug}`}
@@ -1619,7 +1652,7 @@ export default function VisualizerClient() {
       {/* A. Sourcing Quote Estimate Calculator Modal */}
       {isQuoteModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-stone-950/85 backdrop-blur-md">
-          <div className="relative w-full max-w-2xl bg-stone-900 border border-stone-800 rounded-2xl overflow-hidden shadow-2xl p-6 md:p-8 max-h-[90vh] overflow-y-auto text-stone-300 font-sans text-xs flex flex-col gap-6 animate-in zoom-in-95 duration-250">
+          <div className="relative w-full max-w-2xl bg-stone-900 border border-stone-800 rounded-2xl overflow-hidden shadow-2xl p-6 md:p-8 max-h-[90vh] overflow-y-auto text-stone-300 font-sans text-xs flex flex-col gap-6 animate-in zoom-in-95 duration-250" data-lenis-prevent>
             <button 
               onClick={() => setIsQuoteModalOpen(false)}
               className="absolute top-4 right-4 text-stone-500 hover:text-white transition-colors"
@@ -1778,7 +1811,7 @@ export default function VisualizerClient() {
               </div>
 
               {/* Messages Body */}
-              <div className="flex-1 overflow-y-auto p-5 space-y-5 text-xs">
+              <div className="flex-1 overflow-y-auto p-5 space-y-5 text-xs" data-lenis-prevent>
                 {messages.map((msg, index) => (
                   <div 
                     key={index}

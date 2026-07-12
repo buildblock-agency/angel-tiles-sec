@@ -1,7 +1,6 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import Image from 'next/image';
 import gsap from 'gsap';
 
 interface PreloaderProps {
@@ -51,6 +50,10 @@ export default function Preloader({ onComplete }: PreloaderProps) {
     }
 
     document.body.style.overflow = 'hidden';
+    const preventScroll = (e: TouchEvent) => {
+      e.preventDefault();
+    };
+    document.addEventListener('touchmove', preventScroll, { passive: false });
 
     const panel1 = panel1Ref.current;
     const panel2 = panel2Ref.current;
@@ -64,6 +67,7 @@ export default function Preloader({ onComplete }: PreloaderProps) {
       onComplete: () => {
         sessionStorage.setItem('hasVisited_angel', 'true');
         document.body.style.overflow = '';
+        document.removeEventListener('touchmove', preventScroll);
         setHasVisited(true); // Completely unmount the preloader after animation finishes
       }
     });
@@ -145,37 +149,39 @@ export default function Preloader({ onComplete }: PreloaderProps) {
     }, [], 'exit');
 
     // Sweep stacked full-screen panels off-screen to the left staggered with horizontal stretch
+    // Optimized duration (1.4s) to make it snappier and prevent OOM lag on mobile GPUs
     tl.to(panel1, {
       xPercent: -200,
       scaleX: 1.0,
-      duration: 2.0,
+      duration: 1.4,
       ease: 'power4.inOut'
     }, 'exit');
 
     tl.to(panel2, {
       xPercent: -200,
       scaleX: 1.0,
-      duration: 2.0,
+      duration: 1.4,
       ease: 'power4.inOut'
     }, 'exit+=0.15');
 
     tl.to(panel3, {
       xPercent: -200,
       scaleX: 1.0,
-      duration: 2.0,
+      duration: 1.4,
       ease: 'power4.inOut'
     }, 'exit+=0.3');
 
     tl.to(panel4, {
       xPercent: -200,
       scaleX: 1.0,
-      duration: 2.0,
+      duration: 1.4,
       ease: 'power4.inOut'
     }, 'exit+=0.45');
 
     return () => {
       tl.kill();
       document.body.style.overflow = '';
+      document.removeEventListener('touchmove', preventScroll);
     };
   }, [hasVisited]);
 
@@ -235,50 +241,42 @@ export default function Preloader({ onComplete }: PreloaderProps) {
       <div className="absolute inset-0 z-20 pointer-events-none w-full h-full overflow-hidden">
         
         {/* Panel 1 */}
-        <div ref={panel1Ref} className="panel-1 absolute inset-0 w-full h-full overflow-hidden z-24 bg-stone-900">
-          <Image
+        <div ref={panel1Ref} className="panel-1 absolute inset-0 w-full h-full overflow-hidden z-24 bg-stone-900" style={{ willChange: 'transform' }}>
+          <img
             src="/showroom/makrana_marble_lobby.webp"
             alt="Makrana marble lobby"
-            fill
-            className="object-cover panel-img"
-            sizes="100vw"
-            priority
+            className="w-full h-full object-cover panel-img"
+            loading="eager"
           />
         </div>
 
         {/* Panel 2 */}
-        <div ref={panel2Ref} className="panel-2 absolute inset-0 w-full h-full overflow-hidden z-23 bg-stone-900">
-          <Image
+        <div ref={panel2Ref} className="panel-2 absolute inset-0 w-full h-full overflow-hidden z-23 bg-stone-900" style={{ willChange: 'transform' }}>
+          <img
             src="/showroom/alaska_granite_kitchen.webp"
             alt="Alaska granite kitchen"
-            fill
-            className="object-cover panel-img"
-            sizes="100vw"
-            priority
+            className="w-full h-full object-cover panel-img"
+            loading="eager"
           />
         </div>
 
         {/* Panel 3 */}
-        <div ref={panel3Ref} className="panel-3 absolute inset-0 w-full h-full overflow-hidden z-22 bg-stone-900">
-          <Image
+        <div ref={panel3Ref} className="panel-3 absolute inset-0 w-full h-full overflow-hidden z-22 bg-stone-900" style={{ willChange: 'transform' }}>
+          <img
             src="/showroom/pgvt_tiles_lobby.webp"
             alt="PGVT tiles lobby"
-            fill
-            className="object-cover panel-img"
-            sizes="100vw"
-            priority
+            className="w-full h-full object-cover panel-img"
+            loading="eager"
           />
         </div>
 
         {/* Panel 4 */}
-        <div ref={panel4Ref} className="panel-4 absolute inset-0 w-full h-full overflow-hidden z-21 bg-stone-900">
-          <Image
+        <div ref={panel4Ref} className="panel-4 absolute inset-0 w-full h-full overflow-hidden z-21 bg-stone-900" style={{ willChange: 'transform' }}>
+          <img
             src="/showroom/statuario_marble_living.webp"
             alt="Statuario marble finished living room"
-            fill
-            className="object-cover panel-img"
-            sizes="100vw"
-            priority
+            className="w-full h-full object-cover panel-img"
+            loading="eager"
           />
         </div>
 

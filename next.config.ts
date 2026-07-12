@@ -1,6 +1,7 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  allowedDevOrigins: ['10.28.77.194', '10.28.77.194:3000'],
   // Turbopack configuration
   turbopack: {
     resolveAlias: {

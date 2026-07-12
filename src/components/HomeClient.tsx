@@ -252,7 +252,6 @@ export default function HomeClient() {
       const img = images[Math.max(0, Math.min(totalFrames - 1, imgIdx))];
       if (!img || !img.complete) return;
 
-      // Draw image as object-fit cover
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       
       const imgWidth = img.naturalWidth;
@@ -263,20 +262,62 @@ export default function HomeClient() {
       const imgRatio = imgWidth / imgHeight;
       const canvasRatio = canvasWidth / canvasHeight;
       
-      let drawWidth = canvasWidth;
-      let drawHeight = canvasHeight;
-      let offsetX = 0;
-      let offsetY = 0;
+      const isMobile = canvasWidth < 768 * (window.devicePixelRatio || 1);
 
-      if (imgRatio > canvasRatio) {
-        drawWidth = canvasHeight * imgRatio;
-        offsetX = (canvasWidth - drawWidth) / 2;
+      if (isMobile) {
+        // --- MOBILE PORTRAIT: AMBIENT BLUR & WIDE-ANGLE FOREGROUND ---
+        
+        // 1. Draw Blurred Backdrop Layer (Cover-fit to fill the full vertical screen height)
+        ctx.save();
+        ctx.filter = 'blur(24px) brightness(0.3)';
+        
+        let bgWidth = canvasWidth;
+        let bgHeight = canvasHeight;
+        let bgOffsetX = 0;
+        let bgOffsetY = 0;
+
+        if (imgRatio > canvasRatio) {
+          bgWidth = canvasHeight * imgRatio;
+          bgOffsetX = (canvasWidth - bgWidth) / 2;
+        } else {
+          bgHeight = canvasWidth / imgRatio;
+          bgOffsetY = (canvasHeight - bgHeight) / 2;
+        }
+        
+        ctx.drawImage(img, bgOffsetX, bgOffsetY, bgWidth, bgHeight);
+        ctx.restore();
+
+        // 2. Draw Foreground Layer (Zoomed out by 0.75 relative to cover fit)
+        ctx.save();
+        const zoomFactor = 0.75; // Zooms out from cover fit to bring 25% more of the horizontal slab into view
+        const fgWidth = bgWidth * zoomFactor;
+        const fgHeight = bgHeight * zoomFactor;
+        const fgOffsetX = (canvasWidth - fgWidth) / 2;
+        const fgOffsetY = (canvasHeight - fgHeight) / 2;
+        
+        // Add shadow for depth
+        ctx.shadowColor = 'rgba(0, 0, 0, 0.7)';
+        ctx.shadowBlur = 35;
+        
+        ctx.drawImage(img, fgOffsetX, fgOffsetY, fgWidth, fgHeight);
+        ctx.restore();
       } else {
-        drawHeight = canvasWidth / imgRatio;
-        offsetY = (canvasHeight - drawHeight) / 2;
-      }
+        // --- DESKTOP LANDSCAPE: STANDARD FULL-BLEED COVER FIT ---
+        let drawWidth = canvasWidth;
+        let drawHeight = canvasHeight;
+        let offsetX = 0;
+        let offsetY = 0;
 
-      ctx.drawImage(img, offsetX, offsetY, drawWidth, drawHeight);
+        if (imgRatio > canvasRatio) {
+          drawWidth = canvasHeight * imgRatio;
+          offsetX = (canvasWidth - drawWidth) / 2;
+        } else {
+          drawHeight = canvasWidth / imgRatio;
+          offsetY = (canvasHeight - drawHeight) / 2;
+        }
+
+        ctx.drawImage(img, offsetX, offsetY, drawWidth, drawHeight);
+      }
     };
 
     const scrollObj = { frame: 1 };
@@ -284,29 +325,33 @@ export default function HomeClient() {
     window.addEventListener('resize', resizeCanvas);
     resizeCanvas();
 
-    // GSAP ScrollTrigger to scrub the frame value
-    gsap.to(scrollObj, {
-      frame: totalFrames,
-      snap: 'frame',
-      ease: 'none',
+    // Bind scrub animation to scroll
+    const tl = gsap.timeline({
       scrollTrigger: {
         trigger: heroSectionRef.current,
         start: 'top top',
         end: 'bottom bottom',
-        scrub: 0.5,
-        onUpdate: (self) => {
-          renderFrame(scrollObj.frame);
-        }
+        scrub: 0.6,
+      }
+    });
+
+    tl.to(scrollObj, {
+      frame: totalFrames,
+      snap: 'frame',
+      ease: 'none',
+      onUpdate: () => {
+        renderFrame(scrollObj.frame);
       }
     });
 
     // Fade out canvas background when scrolling past the hero
     gsap.to(canvas, {
-      opacity: 0.15,
+      opacity: 0,
+      ease: 'none',
       scrollTrigger: {
         trigger: heroSectionRef.current,
-        start: 'bottom 90%',
-        end: 'bottom 30%',
+        start: '80% top',
+        end: 'bottom top',
         scrub: true,
       }
     });
@@ -443,7 +488,7 @@ export default function HomeClient() {
         >
         {/* Pinned Canvas Viewport */}
         <div className="sticky top-0 left-0 h-screen w-full overflow-hidden flex items-center justify-center z-0">
-          <canvas ref={canvasRef} className="absolute inset-0 z-0 select-none pointer-events-none" />
+          <canvas ref={canvasRef} className="absolute md:inset-0 z-0 select-none pointer-events-none" />
           
           {/* Subtle dark gradient overlay over canvas */}
           <div className="absolute inset-0 bg-gradient-to-t from-stone-950 via-stone-950/40 to-stone-950/80 z-10" />
