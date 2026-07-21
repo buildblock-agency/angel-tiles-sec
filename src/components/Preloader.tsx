@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import Image from 'next/image';
 import gsap from 'gsap';
 
 interface PreloaderProps {
@@ -50,32 +51,58 @@ export default function Preloader({ onComplete }: PreloaderProps) {
     }
 
     document.body.style.overflow = 'hidden';
+    document.documentElement.style.overflow = 'hidden';
+
     const preventScroll = (e: TouchEvent) => {
       e.preventDefault();
     };
     document.addEventListener('touchmove', preventScroll, { passive: false });
+
+    // --- Mobile viewport lock ---
+    // Mobile browsers collapse/expand the address bar right after load,
+    // which resizes this `fixed inset-0` container mid-animation. Because
+    // the panels use `fill` + `object-cover`, that resize reads as the
+    // image "zooming". Lock the height to the settled viewport size so
+    // it can't move once the exit sequence starts.
+    const container = containerRef.current;
+    const lockHeight = () => {
+      if (container) {
+        const h = window.visualViewport?.height ?? window.innerHeight;
+        container.style.height = `${h}px`;
+      }
+    };
+    lockHeight();
+
+    let stopTrackingViewport: (() => void) | undefined;
+    if (window.visualViewport) {
+      const onViewportResize = () => lockHeight();
+      window.visualViewport.addEventListener('resize', onViewportResize);
+      stopTrackingViewport = () =>
+        window.visualViewport?.removeEventListener('resize', onViewportResize);
+      setTimeout(() => stopTrackingViewport?.(), 1200);
+    }
+    // ---------------------------
 
     const panel1 = panel1Ref.current;
     const panel2 = panel2Ref.current;
     const panel3 = panel3Ref.current;
     const panel4 = panel4Ref.current;
     const cover = coverRef.current;
-    const container = containerRef.current;
 
     // GSAP master timeline for the sequence
     const tl = gsap.timeline({
       onComplete: () => {
         sessionStorage.setItem('hasVisited_angel', 'true');
         document.body.style.overflow = '';
+        document.documentElement.style.overflow = '';
         document.removeEventListener('touchmove', preventScroll);
-        setHasVisited(true); // Completely unmount the preloader after animation finishes
+        setHasVisited(true);
       }
     });
 
     // 1. Initial State Setup
     gsap.set(cover, { xPercent: 0 });
-    gsap.set([panel1, panel2, panel3, panel4], { xPercent: 0, scaleX: 1.5, transformOrigin: '0% 50%' });
-    gsap.set('.panel-img', { scale: 1.15 });
+    gsap.set([panel1, panel2, panel3, panel4], { xPercent: 0 });
     gsap.set([text1Ref.current, text2Ref.current], { yPercent: 105, opacity: 0 });
     gsap.set(subTextRef.current, { yPercent: -105, opacity: 0 });
 
@@ -116,72 +143,59 @@ export default function Preloader({ onComplete }: PreloaderProps) {
       ease: 'power3.out'
     }, 'start+=0.38');
 
-    // 3. Phase 2: Cover Sweep Right (reveals images behind the text)
+    // 3. Phase 2: Cover Sweep Right (reveals stacked panels)
     tl.to(cover, {
       xPercent: 101,
       duration: 1.2,
       ease: 'expo.inOut'
     }, 'start+=1.8');
 
-    // Zoom-out images slowly when cover is swiped
-    tl.to('.panel-img', {
-      scale: 1.0,
-      duration: 2.2,
-      ease: 'power2.out'
-    }, 'start+=1.8');
-
     // 4. Phase 3: Settle Hold
     tl.addLabel('exit', 'start+=3.4');
 
-    // 5. Phase 4: Staggered Panels Sweep Left (Exit)
     tl.set(container, { pointerEvents: 'none' }, 'exit');
 
-    // Fade out text layers
     tl.to([text1Ref.current, text2Ref.current, subTextRef.current, '.preloader-footer'], {
       opacity: 0,
       duration: 0.5,
       ease: 'power2.inOut'
     }, 'exit');
 
-    // Call the onComplete callback from props at the start of exit!
     tl.call(() => {
-      onCompleteRef.current(); // Fire homepage entrance!
+      onCompleteRef.current();
     }, [], 'exit');
 
-    // Sweep stacked full-screen panels off-screen to the left staggered with horizontal stretch
-    // Optimized duration (1.4s) to make it snappier and prevent OOM lag on mobile GPUs
+    // Staggered panels sweep left — 1 viewport width, no scale, no will-change
     tl.to(panel1, {
-      xPercent: -200,
-      scaleX: 1.0,
-      duration: 1.4,
+      xPercent: -100,
+      duration: 1.2,
       ease: 'power4.inOut'
     }, 'exit');
 
     tl.to(panel2, {
-      xPercent: -200,
-      scaleX: 1.0,
-      duration: 1.4,
+      xPercent: -100,
+      duration: 1.2,
       ease: 'power4.inOut'
     }, 'exit+=0.15');
 
     tl.to(panel3, {
-      xPercent: -200,
-      scaleX: 1.0,
-      duration: 1.4,
+      xPercent: -100,
+      duration: 1.2,
       ease: 'power4.inOut'
     }, 'exit+=0.3');
 
     tl.to(panel4, {
-      xPercent: -200,
-      scaleX: 1.0,
-      duration: 1.4,
+      xPercent: -100,
+      duration: 1.2,
       ease: 'power4.inOut'
     }, 'exit+=0.45');
 
     return () => {
       tl.kill();
       document.body.style.overflow = '';
+      document.documentElement.style.overflow = '';
       document.removeEventListener('touchmove', preventScroll);
+      stopTrackingViewport?.();
     };
   }, [hasVisited]);
 
@@ -205,7 +219,7 @@ export default function Preloader({ onComplete }: PreloaderProps) {
         <div className="overflow-hidden py-2 flex items-center justify-center">
           <span
             ref={text2Ref}
-            className="block font-sans text-6xl sm:text-8xl md:text-[11vw] font-light tracking-[0.15em] leading-[0.9] text-gold-400 uppercase select-none opacity-0"
+            className="block font-sans text-6xl sm:text-8xl md:text-[11vw] font-light tracking-[0.15em] leading-[0.9] text-garnet-400 uppercase select-none opacity-0"
           >
             Tiles
           </span>
@@ -234,49 +248,57 @@ export default function Preloader({ onComplete }: PreloaderProps) {
       {/* Solid Background Cover (Layer 2 — z-25, slides right to reveal images) */}
       <div
         ref={coverRef}
-        className="preloader-cover absolute inset-0 bg-stone-950 z-25"
+        className="preloader-cover absolute inset-0 bg-stone-700 z-25"
       />
 
       {/* Stacked Full-Screen Image Panels (Layer 1 — z-21 to z-24, slides left staggered to reveal page) */}
       <div className="absolute inset-0 z-20 pointer-events-none w-full h-full overflow-hidden">
         
         {/* Panel 1 */}
-        <div ref={panel1Ref} className="panel-1 absolute inset-0 w-full h-full overflow-hidden z-24 bg-stone-900" style={{ willChange: 'transform' }}>
-          <img
+        <div ref={panel1Ref} className="panel-1 absolute inset-0 w-full h-full overflow-hidden z-24 bg-stone-700">
+          <Image
             src="/showroom/makrana_marble_lobby.webp"
             alt="Makrana marble lobby"
-            className="w-full h-full object-cover panel-img"
-            loading="eager"
+            fill
+            className="object-cover"
+            sizes="100vw"
+            priority
           />
         </div>
 
         {/* Panel 2 */}
-        <div ref={panel2Ref} className="panel-2 absolute inset-0 w-full h-full overflow-hidden z-23 bg-stone-900" style={{ willChange: 'transform' }}>
-          <img
+        <div ref={panel2Ref} className="panel-2 absolute inset-0 w-full h-full overflow-hidden z-23 bg-stone-700">
+          <Image
             src="/showroom/alaska_granite_kitchen.webp"
             alt="Alaska granite kitchen"
-            className="w-full h-full object-cover panel-img"
-            loading="eager"
+            fill
+            className="object-cover"
+            sizes="100vw"
+            priority
           />
         </div>
 
         {/* Panel 3 */}
-        <div ref={panel3Ref} className="panel-3 absolute inset-0 w-full h-full overflow-hidden z-22 bg-stone-900" style={{ willChange: 'transform' }}>
-          <img
+        <div ref={panel3Ref} className="panel-3 absolute inset-0 w-full h-full overflow-hidden z-22 bg-stone-700">
+          <Image
             src="/showroom/pgvt_tiles_lobby.webp"
             alt="PGVT tiles lobby"
-            className="w-full h-full object-cover panel-img"
-            loading="eager"
+            fill
+            className="object-cover"
+            sizes="100vw"
+            priority
           />
         </div>
 
         {/* Panel 4 */}
-        <div ref={panel4Ref} className="panel-4 absolute inset-0 w-full h-full overflow-hidden z-21 bg-stone-900" style={{ willChange: 'transform' }}>
-          <img
+        <div ref={panel4Ref} className="panel-4 absolute inset-0 w-full h-full overflow-hidden z-21 bg-stone-700">
+          <Image
             src="/showroom/statuario_marble_living.webp"
             alt="Statuario marble finished living room"
-            className="w-full h-full object-cover panel-img"
-            loading="eager"
+            fill
+            className="object-cover"
+            sizes="100vw"
+            priority
           />
         </div>
 

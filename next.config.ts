@@ -1,7 +1,23 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  allowedDevOrigins: ['10.28.77.194', '10.28.77.194:3000'],
+  allowedDevOrigins: ['10.28.77.194', '10.28.77.194:3000','100.100.100.191'],
+  compress: true,
+  images: {
+    remotePatterns: [
+      {
+        protocol: 'https',
+        hostname: 'res.cloudinary.com',
+        port: '',
+        pathname: '/**',
+      },
+    ],
+    formats: ['image/webp', 'image/avif'],
+    deviceSizes: [480, 640, 768, 1024, 1280, 1536, 1920],
+  },
+  experimental: {
+    optimizePackageImports: ['lucide-react', 'framer-motion', 'gsap'],
+  },
   // Turbopack configuration
   turbopack: {
     resolveAlias: {
@@ -35,6 +51,22 @@ const nextConfig: NextConfig = {
       };
     }
     return config;
+ },
+  async headers() {
+    return [
+      {
+        source: '/:all*(webp|png|jpg|jpeg|gif|svg|ico)',
+        headers: [
+          { key: 'Cache-Control', value: 'public, max-age=31536000, immutable' },
+        ],
+      },
+      {
+        source: '/:path*',
+        headers: [
+          { key: 'X-DNS-Prefetch-Control', value: 'on' },
+        ],
+      },
+    ];
   },
 };
 

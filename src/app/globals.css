@@ -1,30 +1,44 @@
-@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=Montserrat:wght@300;400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@400;500;600;700;800;900&family=Outfit:wght@300;400;500;600;700;800&display=swap');
 @import "tailwindcss";
 
 @theme {
-  --font-sans: "Montserrat", Arial, sans-serif;
-  --font-serif: "Cormorant Garamond", Georgia, serif;
+  --font-sans: "Outfit", system-ui, -apple-system, sans-serif;
+  --font-serif: "Cinzel", Georgia, serif;
   
-  --color-gold-50: #fcf9ee;
-  --color-gold-100: #f6eda2;
-  --color-gold-200: #eed865;
-  --color-gold-300: #e2ba34;
-  --color-gold-400: #d49f1a;
-  --color-gold-500: #b97f13;
-  --color-gold-600: #9a5f0f;
-  --color-gold-700: #7b4310;
-  --color-gold-800: #663612;
-  --color-gold-900: #552d13;
-  --color-gold-950: #311506;
+  /* Graphite Ink Scale (Replaces warm stone) */
+  --color-stone-50:  #f6f6f7;
+  --color-stone-100: #e9eaeb;
+  --color-stone-200: #d1d3d5;
+  --color-stone-300: #aeb1b5;
+  --color-stone-400: #85898e;
+  --color-stone-500: #62666b;
+  --color-stone-600: #494c50;
+  --color-stone-700: #35373a;
+  --color-stone-800: #232527;
+  --color-stone-900: #17181a;
+  --color-stone-950: #0a0b0c;
 
-  --color-stone-900: #1c1917;
-  --color-stone-950: #0c0a09;
+  /* Silver Scale (Refined text & foreground) */
+  --color-silver-50:  #f8f8f9;
+  --color-silver-100: #eceeef;
+  --color-silver-200: #d4d6d9;
+  --color-silver-300: #b7bac0;
+  --color-silver-400: #9a9da3;
+  --color-silver-500: #7d8086;
+
+  /* Garnet Accent Scale (Fine Red) */
+  --color-garnet-300: #d98f96;
+  --color-garnet-400: #b8434f;
+  --color-garnet-500: #96222f;
+  --color-garnet-600: #7a1a26;
+  --color-garnet-700: #5e141d;
+  --color-garnet-800: #421015;
 }
 
 :root {
-  --background: #0c0a09;
-  --foreground: #f5f5f4;
-  --primary-gold: #d49f1a;
+  --background: #0a0b0c;
+  --foreground: #eceeef;
+  --primary-accent: #96222f;
 }
 
 body {
@@ -56,7 +70,7 @@ body {
   30% { transform:translate(7%, -25%) }
   40% { transform:translate(-5%, 25%) }
   50% { transform:translate(-15%, 10%) }
-  60% { transform:translate(15%, -5%) }
+  60% { transform:translate(7%, -25%) }
   70% { transform:translate(0%, 15%) }
   80% { transform:translate(3%, 35%) }
   90% { transform:translate(-10%, 10%) }
@@ -66,7 +80,7 @@ body {
 .custom-cursor {
   width: 8px;
   height: 8px;
-  background-color: var(--primary-gold);
+  background-color: var(--primary-accent);
   border-radius: 50%;
   position: fixed;
   transform: translate(-50%, -50%);
@@ -78,7 +92,7 @@ body {
 .custom-cursor-ring {
   width: 40px;
   height: 40px;
-  border: 1px solid rgba(212, 159, 26, 0.4);
+  border: 1px solid rgba(184, 67, 79, 0.4);
   border-radius: 50%;
   position: fixed;
   transform: translate(-50%, -50%);
@@ -108,28 +122,29 @@ html.lenis, html.lenis body {
   pointer-events: none;
 }
 
-/* Hide scrollbar defaults */
+/* Scrollbar styling */
 ::-webkit-scrollbar {
   width: 8px;
 }
 
 ::-webkit-scrollbar-track {
-  background: #0c0a09;
+  background: #0a0b0c;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #292524;
+  background: #232527;
   border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--primary-gold);
+  background: var(--primary-accent);
 }
 
-/* Custom text utility for gold foil look */
-.text-gold-foil {
-  background: linear-gradient(135deg, #f6eda2 0%, #d49f1a 50%, #7b4310 100%);
+/* Custom text utility for garnet foil look */
+.text-garnet-foil {
+  background: linear-gradient(135deg, #d98f96 0%, #96222f 55%, #421015 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
 }
+

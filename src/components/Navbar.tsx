@@ -69,21 +69,23 @@ export default function Navbar() {
           {/* Brand Logo */}
           <Link 
             href="/" 
-            className="flex items-center gap-2 group"
+            className="flex items-center gap-3 group"
             data-cursor="home"
           >
-            <Image 
-              src="/logo.png" 
-              alt="Angel Tiles & Stone Logo" 
-              width={36} 
-              height={36} 
-              className="object-contain"
-            />
+            <div className="w-10 h-10 rounded-full border border-garnet-500/30 bg-stone-900/80 overflow-hidden flex items-center justify-center p-1 group-hover:border-garnet-400/60 transition-colors shadow-sm">
+              <Image 
+                src="/logo.png" 
+                alt="Angel Tiles & Stone Logo" 
+                width={32} 
+                height={32} 
+                className="object-contain w-full h-full"
+              />
+            </div>
             <div className="flex flex-col">
-              <span className="font-serif text-lg tracking-widest text-white font-medium uppercase group-hover:text-gold-400 transition-colors">
-                Angel
+              <span className="font-serif text-lg tracking-widest text-silver-100 font-medium uppercase group-hover:text-garnet-400 transition-colors">
+               <span className='text-garnet-400'>Angel</span> 
               </span>
-              <span className="text-[9px] tracking-[0.25em] text-stone-500 uppercase -mt-1 font-sans">
+              <span className="text-[9px] tracking-[0.25em] text-stone-400 uppercase -mt-1 font-sans">
                 Tiles & Stone Studio
               </span>
             </div>
@@ -99,8 +101,8 @@ export default function Navbar() {
                   href={link.href}
                   className={`text-xs font-semibold uppercase tracking-widest transition-colors ${
                     isActive 
-                      ? 'text-gold-400 font-bold border-b border-gold-400/50 pb-1' 
-                      : 'text-stone-400 hover:text-white'
+                      ? 'text-garnet-400 font-bold border-b-2 border-garnet-400 pb-1' 
+                      : 'text-silver-300 hover:text-silver-50'
                   }`}
                   data-cursor="explore"
                 >
@@ -115,7 +117,7 @@ export default function Navbar() {
             {/* CTA Button (Desktop & Tablet) */}
             <Link
               href="/visualize"
-              className="hidden sm:inline-flex relative items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-gold-500 to-gold-600 text-stone-950 font-bold text-xs uppercase tracking-widest rounded-full transition-transform hover:scale-105 active:scale-95 shadow-md shadow-gold-500/20"
+              className="hidden sm:inline-flex relative items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-garnet-500 to-garnet-600 hover:from-garnet-600 hover:to-garnet-700 text-silver-50 font-bold text-xs uppercase tracking-widest rounded-full transition-all hover:scale-105 active:scale-95 shadow-md shadow-garnet-900/30 border border-garnet-400/30"
               data-cursor="try"
             >
               <Sparkles className="w-3.5 h-3.5" />
@@ -125,13 +127,13 @@ export default function Navbar() {
             {/* Hamburger Trigger button */}
             <button
               onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
-              className="md:hidden flex items-center justify-center w-10 h-10 text-stone-400 hover:text-white transition-colors focus:outline-none rounded-lg border border-stone-800 bg-stone-950/40"
+              className="md:hidden flex items-center justify-center w-10 h-10 text-silver-300 hover:text-silver-50 transition-colors focus:outline-none rounded-lg border border-stone-800 bg-stone-950/40"
               aria-label="Toggle navigation menu"
             >
               {isMobileMenuOpen ? (
-                <X className="w-5 h-5 text-gold-400 animate-in fade-in zoom-in duration-200" />
+                <X className="w-5 h-5 text-garnet-400 animate-in fade-in zoom-in duration-200" />
               ) : (
-                <Menu className="w-5 h-5 text-stone-300 animate-in fade-in zoom-in duration-200" />
+                <Menu className="w-5 h-5 text-silver-200 animate-in fade-in zoom-in duration-200" />
               )}
             </button>
           </div>
@@ -154,8 +156,8 @@ export default function Navbar() {
                 href={link.href}
                 className={`text-sm font-semibold uppercase tracking-widest py-3 border-b border-stone-900/50 transition-colors ${
                   isActive 
-                    ? 'text-gold-400 font-bold border-gold-400/20' 
-                    : 'text-stone-300 hover:text-white border-transparent'
+                    ? 'text-garnet-400 font-bold border-garnet-400/40' 
+                    : 'text-silver-300 hover:text-silver-50 border-transparent'
                 }`}
               >
                 {link.name}
@@ -167,7 +169,7 @@ export default function Navbar() {
         <div className="pt-6 mt-2 border-t border-stone-900">
           <Link
             href="/visualize"
-            className="flex items-center justify-center gap-2 w-full py-4 bg-gradient-to-r from-gold-500 to-gold-600 text-stone-950 font-bold text-xs uppercase tracking-widest rounded-full transition-transform hover:scale-[1.02] active:scale-[0.98] shadow-md shadow-gold-500/10"
+            className="flex items-center justify-center gap-2 w-full py-4 bg-gradient-to-r from-garnet-500 to-garnet-600 text-silver-50 font-bold text-xs uppercase tracking-widest rounded-full transition-transform hover:scale-[1.02] active:scale-[0.98] shadow-md shadow-garnet-900/30 border border-garnet-400/30"
           >
             <Sparkles className="w-4 h-4" />
             <span>See In Your Space</span>

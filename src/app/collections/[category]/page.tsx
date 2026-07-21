@@ -1,15 +1,23 @@
 import { notFound } from 'next/navigation';
-import CategoryClient from '@/components/CategoryClient';
-import { CATEGORIES, getProductsByCategory, PRODUCTS } from '@/content/products';
+import dynamic from 'next/dynamic';
+import { CATEGORIES, getProductsByCategory } from '@/content/products';
+
+const CategoryClient = dynamic(() => import('@/components/CategoryClient'), {
+  loading: () => (
+    <div className="min-h-screen bg-stone-950 flex items-center justify-center">
+      <div className="flex flex-col items-center gap-4">
+        <div className="w-8 h-8 border-2 border-garnet-400 border-t-transparent rounded-full animate-spin" />
+        <span className="text-xs text-stone-400 uppercase tracking-widest">Loading Collection...</span>
+      </div>
+    </div>
+  ),
+});
 
 // Pre-generate static parameters for Next.js Static Site Generation (SSG)
 export async function generateStaticParams() {
-  return [
-    { category: 'marble' },
-    { category: 'granite' },
-    { category: 'tiles' },
-    { category: 'sanitaryware' }
-  ];
+  return Object.keys(CATEGORIES).map((slug) => ({
+    category: slug,
+  }));
 }
 
 // Generate dynamic metadata for SEO
@@ -41,23 +49,39 @@ export default async function CategoryPage(props: { params: Promise<{ category: 
 
   const categoryProducts = getProductsByCategory(categoryKey);
 
-  // Curated 200-400 word SEO on-page blocks targeting Jodhpur local queries
-  const seoBlocks = {
-    marble: `
-      <p>Choosing the right <strong>marble suppliers in Jodhpur</strong> requires understanding the geological grades of the stone. Italian marble options like Statuario and Carrara are prized for their crystalline white backgrounds and sweeping veins, elevating luxury interiors to art pieces. Indian marble varieties, particularly from the historical quarries of Makrana, remain unmatched in durability and calcium percentage. Unlike vitrified alternatives, real marble slabs are highly translucent, developing a rich generational shine over decades.</p>
-      <p>When procurement is planned, visiting a specialized showroom to inspect complete book-matched slab runs is critical. At Angel Tiles & Stone Jodhpur, we display full slab sets under natural daylighting and warm spotlights so architects and clients can preview the final vein intersections. Our slabs are reinforced with high-strength resins and hand-inspected for core density to guarantee perfect structural stability during floor layout laying.</p>
+  // Curated SEO on-page blocks targeting Jodhpur local queries
+  const seoBlocks: Record<string, string> = {
+    "imported-marble": `
+      <p>Choosing imported Italian marble for luxury residences in Jodhpur requires selecting blocks with consistent grain structure and zero structural micro-fissures. Varieties like Statuario and Carrara White provide snow-white canvases with dramatic or feathery grey veining that elevate living room floors into gallery-level artwork.</p>
+      <p>At Angel Studio Jodhpur, we showcase complete book-matched imported slab runs under natural daylighting so architects and clients can preview final vein intersections prior to installation.</p>
     `,
-    granite: `
-      <p>Granite slabs are the premier selection for kitchen counter slabs, stair treads, and heavy-duty thresholds in Rajasthan. Sourced from the ancient crags of the Aravalli range, granite presents extreme compressive strength and scratch-free density. Variants like Jodhpur Red and Rajasthan Black are favored locally for outdoor paving due to their resistance to blistering heat and weathering. Imported granites like Alaska White incorporate silver mica crystals that shimmer under overhead spotlighting.</p>
-      <p>As the leading <strong>granite dealers in Jodhpur</strong>, we supply slabs pre-calibrated and polished to mirror indexes. Granite countertops are highly resistant to acidic stains from lemon juice or vinegar when properly sealed. Our installation guide recommends applying a premium impregnating stone sealer immediately after laying to protect the natural crystalline pores from long-term oil absorption.</p>
+    "domestic-marble": `
+      <p>Authentic Makrana White marble from historical Rajasthan quarries is world-renowned for its extremely high calcium concentration (98%+) and zero chemical fillers. Unlike softer limestone imports, Makrana marble never yellows over time and develops an exquisite deep luster over generations.</p>
+      <p>We source Makrana Albeta and Rajnagar marble slabs directly from trusted quarry owners, delivering authentic Rajasthan heritage stone with full slab transparency.</p>
     `,
-    tiles: `
-      <p>Modern vitrified tiles are the cornerstone of speed and low-maintenance in modern architectures. Glazed Vitrified Tiles (GVT) and Polished Glazed Vitrified Tiles (PGVT) offer extremely realistic high-definition replicas of rare marbles, concrete, and wooden planks. For high-traffic commercial projects, Double Charge vitrified tiles are engineered with a dual pigment layer that stands up to heavy wear without showing signs of traffic wear.</p>
-      <p>At our premium <strong>tiles showroom in Jodhpur</strong>, we showcase large-format tiles sizing up to 1200x600mm and 1600x800mm. Laying larger tiles minimizes joint grouts, creating the illusion of a monolithic slab floor. All our tile products feature high break resistance, zero water absorption (<0.05%), and flat structural edges for neat laying with minimal leveling offsets.</p>
+    "granite": `
+      <p>Granite slabs are the premier selection for kitchen counter slabs, stair treads, and heavy-duty thresholds in Rajasthan. Sourced from the Aravalli range, granite presents extreme compressive strength and scratch-free density. Variants like Jodhpur Red and Rajasthan Black are favored locally for outdoor paving due to their weather resistance.</p>
+      <p>As leading granite dealers in Jodhpur, we supply slabs pre-calibrated and polished to mirror index levels for seamless countertop laying.</p>
     `,
-    sanitaryware: `
-      <p>Luxury bathroom designs demand a clean alignment of sanitaryware and brassware. The shift towards minimal wall-hung closets with concealed flush systems has transformed toilets from utilities to clean design extensions. Choosing closets with rimless bowl geometry ensures 100% flushing coverage, eliminating standard hidden corners where bacteria and water scales gather over time.</p>
-      <p>As premium <strong>sanitaryware showroom dealers in Jodhpur</strong>, we house modern matte-colored tabletop washbasins, rimless water closets, and premium bath fittings. Our basins feature ultra-thin 5mm structural edges crafted from refined clays fired at high kiln temperatures. All ceramic glazes incorporate a dirt-repellent nano-coating, ensuring water sheets off without leaving chalky deposits.</p>
+    "tiles": `
+      <p>Modern vitrified tiles are the cornerstone of speed and minimal maintenance. Glazed Vitrified Tiles (GVT) and Polished Glazed Vitrified Tiles (PGVT) offer high-definition replicas of rare marbles and architectural concrete in formats up to 1600x800mm.</p>
+      <p>At our Jodhpur studio, explore large-format vitrified floor slabs engineered with high break resistance, zero water absorption (<0.05%), and micro-rectified edges.</p>
+    `,
+    "custom-tiles": `
+      <p>Custom architectural tiles and precision waterjet mosaic compositions allow architects to create signature foyer floor medallions, Pooja room backdrops, and bespoke hotel lobbies.</p>
+      <p>Angel Studio collaborates with designers to fabricate custom terrazzo patterns and marble waterjet inlays tailored precisely to project CAD layouts.</p>
+    `,
+    "digital-3d-7d-tiles": `
+      <p>Digital 3D and 7D carving elevation tiles combine multi-layer textured printing with metallic shimmer accents to create realistic stone reliefs and tactile depth on exterior facades and interior feature walls.</p>
+      <p>Our 7D carving tiles are engineered to withstand extreme UV exposure without fading or thermal cracking.</p>
+    `,
+    "ceramic-crystal-tiles": `
+      <p>Crystal glazed ceramic wall tiles feature a high-firing mirror glass glaze that offers brilliant light reflection while repelling moisture and soap scums in bathroom wall cladding.</p>
+      <p>Explore an array of vibrant colors and ultra-smooth ceramic wall finishes at our Jodhpur studio.</p>
+    `,
+    "sanitary-items": `
+      <p>Luxury bathroom designs demand a clean alignment of sanitaryware items. Minimal wall-hung rimless closets with concealed flush systems ensure 100% flushing coverage with quiet swirl operation.</p>
+      <p>Pair wall-hung closets with our ultra-thin 5mm tabletop ceramic washbasins in matte terracotta, black, and pastel tones for a sophisticated vanity centerpiece.</p>
     `
   };
 
@@ -72,3 +96,4 @@ export default async function CategoryPage(props: { params: Promise<{ category: 
     />
   );
 }
+

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 export default function CustomCursor() {
   const [position, setPosition] = useState({ x: 0, y: 0 });
@@ -8,6 +8,8 @@ export default function CustomCursor() {
   const [isHovered, setIsHovered] = useState(false);
   const [cursorText, setCursorText] = useState('');
   const [isVisible, setIsVisible] = useState(false);
+  const idleRef = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const mouseActiveRef = useRef(true);
 
   useEffect(() => {
     // Hide cursor on touch devices
@@ -18,6 +20,9 @@ export default function CustomCursor() {
 
     const onMouseMove = (e: MouseEvent) => {
       setPosition({ x: e.clientX, y: e.clientY });
+      mouseActiveRef.current = true;
+      clearTimeout(idleRef.current);
+      idleRef.current = setTimeout(() => { mouseActiveRef.current = false; }, 2000);
     };
 
     window.addEventListener('mousemove', onMouseMove);
@@ -53,6 +58,7 @@ export default function CustomCursor() {
       window.removeEventListener('mousemove', onMouseMove);
       document.removeEventListener('mouseover', handleMouseOver);
       document.removeEventListener('mouseout', handleMouseOut);
+      clearTimeout(idleRef.current);
     };
   }, []);
 
@@ -63,6 +69,10 @@ export default function CustomCursor() {
     let reqId: number;
     
     const updateRing = () => {
+      if (!mouseActiveRef.current) {
+        reqId = requestAnimationFrame(updateRing);
+        return;
+      }
       setRingPosition((prev) => {
         const dx = position.x - prev.x;
         const dy = position.y - prev.y;
@@ -90,7 +100,7 @@ export default function CustomCursor() {
           top: `${position.y}px`,
           width: isHovered ? '4px' : '8px',
           height: isHovered ? '4px' : '8px',
-          backgroundColor: isHovered ? '#ffffff' : '#d49f1a',
+          backgroundColor: isHovered ? '#ffffff' : '#96222f',
         }}
       />
       
@@ -102,8 +112,8 @@ export default function CustomCursor() {
           top: `${ringPosition.y}px`,
           width: isHovered ? (cursorText ? '80px' : '56px') : '40px',
           height: isHovered ? (cursorText ? '80px' : '56px') : '40px',
-          borderColor: isHovered ? 'rgba(255, 255, 255, 0.8)' : 'rgba(212, 159, 26, 0.4)',
-          backgroundColor: isHovered ? 'rgba(212, 159, 26, 0.1)' : 'transparent',
+          borderColor: isHovered ? 'rgba(255, 255, 255, 0.8)' : 'rgba(150, 34, 47, 0.4)',
+          backgroundColor: isHovered ? 'rgba(150, 34, 47, 0.15)' : 'transparent',
         }}
       >
         {cursorText && (

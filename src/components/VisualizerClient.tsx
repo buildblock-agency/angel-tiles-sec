@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import Link from 'next/link';
 import Image from 'next/image';
@@ -12,6 +12,7 @@ import {
 import Navbar from '@/components/Navbar';
 import Footer from '@/components/Footer';
 import { PRODUCTS, Product } from '@/content/products';
+import { useSamWorker } from '@/hooks/useSamWorker';
 
 interface Point {
   x: number;
@@ -67,9 +68,8 @@ const resizeImageToMax = (img: HTMLImageElement, maxDim: number): HTMLCanvasElem
 };
 
 // --- Segment Anything Model (SAM) Tensor to Canvas Helper ---
-
-const createMaskCanvasFromTensor = (
-  maskTensor: any,
+const createMaskCanvasFromTensorData = (
+  maskData: ArrayLike<number>,
   maskIdx: number,
   width: number,
   height: number
@@ -82,14 +82,13 @@ const createMaskCanvasFromTensor = (
 
   const imgData = ctx.createImageData(width, height);
   const data = imgData.data;
-  const maskData = maskTensor.data;
   const stride = width * height;
   const offset = maskIdx * stride;
 
   for (let i = 0; i < stride; i++) {
     const isMask = maskData[offset + i];
     const pixelIndex = i * 4;
-    if (isMask) {
+    if (isMask > 0) {
       data[pixelIndex] = 255;     // R
       data[pixelIndex + 1] = 255; // G
       data[pixelIndex + 2] = 255; // B
@@ -165,11 +164,16 @@ export default function VisualizerClient() {
   const [scanMessage, setScanMessage] = useState('');
   const [hasAnalyzed, setHasAnalyzed] = useState(false);
 
-  // SAM (Segment Anything Model) refs for caching
-  const samModelRef = useRef<any>(null);
-  const samProcessorRef = useRef<any>(null);
-  const samEmbeddingsCacheRef = useRef<Map<string, { embeddings: any; inputs: any; rawImage: any }>>(new Map());
-  
+  // Web Worker for SAM (Segment Anything Model) — Keeps UI thread 100% free of neural net lag
+  const handleWorkerProgress = useCallback((percent: number, msg: string) => {
+    setScanProgress(percent);
+    setScanMessage(msg);
+  }, []);
+
+  const samWorker = useSamWorker(handleWorkerProgress);
+  const samLoadedRef = useRef(false);
+  const embeddedKeysRef = useRef<Set<string>>(new Set());
+
   // Click ripple effect state
   const [ripple, setRipple] = useState<{ x: number; y: number; time: number } | null>(null);
   const [activePoint, setActivePoint] = useState<number | null>(null);
@@ -209,82 +213,38 @@ export default function VisualizerClient() {
   const backgroundImageRef = useRef<HTMLImageElement | null>(null);
   const [loadedTextures, setLoadedTextures] = useState<Record<string, HTMLImageElement>>({});
 
-  // Lazy load SAM model and processor
-  const lazyLoadSam = async (onProgress: (percent: number, msg: string) => void) => {
-    if (samModelRef.current && samProcessorRef.current) {
-      return { model: samModelRef.current, processor: samProcessorRef.current };
-    }
-
-    onProgress(10, "Downloading Segment Anything AI...");
-    
-    // Dynamically import transformers to avoid Node/SSR errors during build
-    const { SamModel, AutoProcessor, env } = await import('@xenova/transformers');
-    
-    env.allowLocalModels = false; // Ensure it looks online
-    
-    // Prevent WASM multi-threading OOM crashes on high-core machines
-    env.backends.onnx.wasm.numThreads = 1;
-
-    onProgress(30, "Loading SlimSAM Neural Model (15MB)...");
-    
-    const processor = await AutoProcessor.from_pretrained('Xenova/slimsam-77-uniform');
-    onProgress(60, "Initializing SlimSAM Vision Encoder...");
-    
-    const model = await SamModel.from_pretrained('Xenova/slimsam-77-uniform');
-    
-    samModelRef.current = model;
-    samProcessorRef.current = processor;
-    
-    onProgress(85, "AI Segmentation Model Loaded!");
-    return { model, processor };
-  };
-
-  // Trigger Scanning animation and process embeddings via SAM
+  // Trigger Scanning animation and process embeddings via SAM Web Worker
   const startScanning = async (img: HTMLImageElement) => {
     setIsScanning(true);
     setScanProgress(0);
-    setScanMessage("Initializing Smart AI Vision Engine...");
+    setScanMessage("Initializing Smart AI Vision Engine (Worker)...");
     setHasAnalyzed(false);
     setUploadError(null);
 
     try {
-      const { model, processor } = await lazyLoadSam((percent, msg) => {
-        setScanProgress(percent);
-        setScanMessage(msg);
-      });
+      if (!samLoadedRef.current) {
+        setScanMessage("Loading SlimSAM Neural Model in Web Worker...");
+        await samWorker.load();
+        samLoadedRef.current = true;
+      }
 
       const cacheKey = img.src;
-      if (samEmbeddingsCacheRef.current.has(cacheKey)) {
+      if (embeddedKeysRef.current.has(cacheKey)) {
         setScanProgress(95);
         setScanMessage("Loading Cached Room Geometry...");
-        await new Promise(resolve => setTimeout(resolve, 300));
+        await new Promise(resolve => setTimeout(resolve, 200));
         setScanProgress(100);
         setIsScanning(false);
         setHasAnalyzed(true);
         return;
       }
 
-      setScanProgress(88);
-      setScanMessage("Analyzing Room Geometry (SAM Vision Encoder)...");
+      setScanProgress(80);
+      setScanMessage("Analyzing Room Geometry (Background Worker)...");
       
-      const { RawImage } = await import('@xenova/transformers');
-      
-      // Downscale image to max 1024px to optimize model inference memory usage
-      const resizedCanvas = resizeImageToMax(img, 1024);
-      const rCtx = resizedCanvas.getContext('2d');
-      if (!rCtx) throw new Error("Failed to get 2d context for resizing");
-      const imageData = rCtx.getImageData(0, 0, resizedCanvas.width, resizedCanvas.height);
-      const rawImage = new RawImage(imageData.data, resizedCanvas.width, resizedCanvas.height, 4);
-      
-      const inputs = await processor(rawImage);
-      const imageEmbeddings = await model.get_image_embeddings(inputs);
-      
-      samEmbeddingsCacheRef.current.set(cacheKey, {
-        embeddings: imageEmbeddings,
-        inputs: inputs,
-        rawImage: rawImage
-      });
-      
+      await samWorker.embed(img.src, cacheKey);
+      embeddedKeysRef.current.add(cacheKey);
+
       setScanProgress(100);
       setScanMessage("Ready for Material Application!");
       
@@ -293,8 +253,8 @@ export default function VisualizerClient() {
         setHasAnalyzed(true);
       }, 300);
 
-    } catch (err) {
-      console.error("SAM Init/Embedding failed:", err);
+    } catch (err: any) {
+      console.error("SAM Web Worker embedding failed:", err);
       setScanMessage("Failed to initialize AI Vision Engine");
       setUploadError("Failed to run Segment Anything model on the image.");
       setIsScanning(false);
@@ -478,7 +438,7 @@ export default function VisualizerClient() {
         tempCanvas.height = canvas.height;
         const tempCtx = tempCanvas.getContext('2d');
         if (tempCtx) {
-          tempCtx.fillStyle = '#d49f1a';
+          tempCtx.fillStyle = '#96222f';
           tempCtx.fillRect(0, 0, canvas.width, canvas.height);
           tempCtx.globalCompositeOperation = 'destination-in';
           tempCtx.drawImage(hoveredReg.maskCanvas, 0, 0, canvas.width, canvas.height);
@@ -514,7 +474,7 @@ export default function VisualizerClient() {
       // Handle Circle
       ctx.beginPath();
       ctx.arc(sx, canvas.height / 2, 20, 0, 2 * Math.PI);
-      ctx.fillStyle = '#d49f1a';
+      ctx.fillStyle = '#96222f';
       ctx.fill();
       ctx.lineWidth = 2.5;
       ctx.strokeStyle = '#ffffff';
@@ -532,21 +492,21 @@ export default function VisualizerClient() {
     if (isScanning) {
       const yScan = (scanProgress / 100) * canvas.height;
       
-      // Draw translucent gold filter above the scan line
+      // Draw translucent garnet filter above the scan line
       ctx.save();
-      ctx.fillStyle = 'rgba(212, 159, 26, 0.08)';
+      ctx.fillStyle = 'rgba(150, 34, 47, 0.08)';
       ctx.beginPath();
       ctx.rect(0, 0, canvas.width, yScan);
       ctx.fill();
       ctx.restore();
       
-      // Draw the scanning line (glowing gold)
+      // Draw the scanning line (glowing garnet)
       ctx.beginPath();
       ctx.moveTo(0, yScan);
       ctx.lineTo(canvas.width, yScan);
       ctx.lineWidth = 4;
-      ctx.strokeStyle = 'rgba(212, 159, 26, 0.85)';
-      ctx.shadowColor = '#d49f1a';
+      ctx.strokeStyle = 'rgba(150, 34, 47, 0.85)';
+      ctx.shadowColor = '#96222f';
       ctx.shadowBlur = 10;
       ctx.stroke();
       ctx.shadowBlur = 0;
@@ -559,7 +519,7 @@ export default function VisualizerClient() {
       const opacity = 1 - (elapsed / 500);
       ctx.beginPath();
       ctx.arc(ripple.x * canvas.width, ripple.y * canvas.height, radius, 0, 2 * Math.PI);
-      ctx.strokeStyle = `rgba(212, 159, 26, ${opacity})`;
+      ctx.strokeStyle = `rgba(150, 34, 47, ${opacity})`;
       ctx.lineWidth = 3.5;
       ctx.stroke();
     }
@@ -671,10 +631,10 @@ export default function VisualizerClient() {
     ctx.lineTo(p3.x, p3.y);
     ctx.closePath();
     ctx.lineWidth = 2.5;
-    ctx.strokeStyle = 'rgba(212, 159, 26, 0.9)'; // Angel gold
+    ctx.strokeStyle = 'rgba(150, 34, 47, 0.9)'; // Angel Garnet
     ctx.stroke();
 
-    ctx.fillStyle = 'rgba(212, 159, 26, 0.05)';
+    ctx.fillStyle = 'rgba(150, 34, 47, 0.05)';
     ctx.fill();
 
     // 2. Draw corner handles
@@ -684,7 +644,7 @@ export default function VisualizerClient() {
 
       ctx.beginPath();
       ctx.arc(px, py, idx === activePoint ? 14 : 9, 0, 2 * Math.PI);
-      ctx.fillStyle = idx === activePoint ? '#ffffff' : '#d49f1a';
+      ctx.fillStyle = idx === activePoint ? '#ffffff' : '#96222f';
       ctx.shadowColor = 'rgba(0, 0, 0, 0.5)';
       ctx.shadowBlur = 6;
       ctx.fill();
@@ -866,62 +826,22 @@ export default function VisualizerClient() {
 
   const triggerSegmentation = async (u: number, v: number, product: Product) => {
     const bgImg = backgroundImageRef.current;
-    if (!bgImg || !samModelRef.current || !samProcessorRef.current) return;
+    if (!bgImg) return;
     
     const cacheKey = bgImg.src;
-    const cached = samEmbeddingsCacheRef.current.get(cacheKey);
-    if (!cached) return;
 
-    const x = Math.round(u * cached.rawImage.width);
-    const y = Math.round(v * cached.rawImage.height);
-    
-    if (x < 0 || x >= cached.rawImage.width || y < 0 || y >= cached.rawImage.height) return;
-    
     // Trigger ripple animation at click point
     setRipple({ x: u, y: v, time: Date.now() });
 
     try {
-      const model = samModelRef.current;
-      const processor = samProcessorRef.current;
+      // Offload SAM decoder prompt inference to Web Worker (zero main thread lag)
+      const result = await samWorker.segment(u, v, cacheKey);
 
-      // Format input points for SAM: [[[[x, y]]]] (4D) and labels: [[[1]]] (3D)
-      const input_points = [[[[x, y]]]];
-      const input_labels = [[[1]]];
+      const { data, dims, bestMaskIdx } = result;
+      const maskWidth = dims[3];
+      const maskHeight = dims[2];
 
-      // Prepare prompts using processor (using positional arguments)
-      const prompt_inputs = await processor(cached.rawImage, input_points, input_labels);
-
-      // Run decoder inference
-      const outputs = await model({
-        ...cached.embeddings,
-        ...prompt_inputs,
-      });
-
-      // Post-process the masks to recover original sizes
-      const masks = await processor.post_process_masks(
-        outputs.pred_masks,
-        cached.inputs.original_sizes,
-        cached.inputs.reshaped_input_sizes
-      );
-
-      // Determine the best mask index based on IoU score
-      let bestMaskIdx = 0;
-      if (outputs.iou_scores) {
-        const scores = outputs.iou_scores.data;
-        let maxScore = -Infinity;
-        for (let i = 0; i < scores.length; i++) {
-          if (scores[i] > maxScore) {
-            maxScore = scores[i];
-            bestMaskIdx = i;
-          }
-        }
-      }
-
-      const maskTensor = masks[0];
-      const maskWidth = maskTensor.dims[3];
-      const maskHeight = maskTensor.dims[2];
-
-      const maskCanvas = createMaskCanvasFromTensor(maskTensor, bestMaskIdx, maskWidth, maskHeight);
+      const maskCanvas = createMaskCanvasFromTensorData(data, bestMaskIdx, maskWidth, maskHeight);
       const bbox = getMaskBoundingBox(maskCanvas);
 
       const newRegionId = 'region-' + Date.now();
@@ -943,8 +863,8 @@ export default function VisualizerClient() {
       setMaskedRegions(prev => [...prev, newRegion]);
       setActiveRegionId(newRegionId);
 
-    } catch (err) {
-      console.error("SAM decoding/inference failed:", err);
+    } catch (err: any) {
+      console.error("SAM Web Worker decoding failed:", err);
       setUploadError("AI failed to segment the clicked point. Please try again.");
     }
   };
@@ -1165,12 +1085,12 @@ export default function VisualizerClient() {
     const msg = encodeURIComponent(
       `Hi Angel Tiles Jodhpur, I previewed the ${selectedProduct.name} slab (Active Lot: ${selectedLot.toUpperCase()}) inside your Room Visualizer and would like to coordinate a quote request.`
     );
-    return `https://wa.me/918147941542?text=${msg}`;
+    return `https://wa.me/919929548511?text=${msg}`;
   };
 
   const waQuoteUrl = () => {
     const calc = calculateEstimateRange(selectedProduct);
-    const rangeText = selectedProduct.category === 'sanitaryware' ? 'units' : 'sq ft';
+    const rangeText = selectedProduct.category === 'sanitary-items' ? 'units' : 'sq ft';
     const msg = encodeURIComponent(
       `Hi Angel Tiles & Stone Jodhpur, I generated an estimate for my space:\n\n` +
       `💎 Material: ${selectedProduct.name}\n` +
@@ -1180,7 +1100,7 @@ export default function VisualizerClient() {
       `💼 Estimated Price Range: ₹${calc.totalMin.toLocaleString('en-IN')} - ₹${calc.totalMax.toLocaleString('en-IN')}\n\n` +
       `Please confirm material availability and coordinate delivery.`
     );
-    return `https://wa.me/918147941542?text=${msg}`;
+    return `https://wa.me/919929548511?text=${msg}`;
   };
 
   const handleConsultantSend = (text: string) => {
@@ -1201,10 +1121,10 @@ export default function VisualizerClient() {
         matchedProds = PRODUCTS.filter(p => p.category === 'granite');
       } else if (lower.includes('bathroom') || lower.includes('bath') || lower.includes('wash') || lower.includes('toilet') || lower.includes('basin')) {
         responseText = "For luxury bathrooms and powder rooms, combining tabletop basins and rimless closets with high-definition PGVT marble-look wall tiles creates a cohesive boutique feel. Here are my recommendations:";
-        matchedProds = PRODUCTS.filter(p => p.category === 'sanitaryware' || p.slug === 'polished-glazed-vitrified-tiles');
+        matchedProds = PRODUCTS.filter(p => p.category === 'sanitary-items' || p.slug === 'polished-glazed-vitrified-tiles');
       } else if (lower.includes('living') || lower.includes('floor') || lower.includes('lobby') || lower.includes('hall') || lower.includes('marble')) {
         responseText = "For luxury living rooms, our bookmatched Carrara and Statuario imports represent the premium tier. For authentic Indian heritage, original Makrana White Marble cannot be beaten. Explore these flooring choices:";
-        matchedProds = PRODUCTS.filter(p => p.category === 'marble' || p.slug === 'polished-glazed-vitrified-tiles');
+        matchedProds = PRODUCTS.filter(p => p.category === 'imported-marble' || p.category === 'domestic-marble' || p.slug === 'polished-glazed-vitrified-tiles');
       } else if (lower.includes('budget') || lower.includes('cheap') || lower.includes('price') || lower.includes('under')) {
         responseText = "If you want an elite look at a highly competitive rate, our vitrified floor tiles are exceptional options. Sourced from Morbi, Gujarat, they require zero resealing. Take a look at these options:";
         matchedProds = PRODUCTS.filter(p => p.slug === 'polished-glazed-vitrified-tiles' || p.slug === 'double-charge-vitrified-tiles' || p.slug === 'jodhpur-red-granite');
@@ -1251,8 +1171,8 @@ export default function VisualizerClient() {
               <ArrowLeft className="w-4 h-4" />
               <span>Back to Home</span>
             </Link>
-            <h1 className="font-serif text-3xl md:text-5xl uppercase tracking-wide text-white">
-              Room <span className="italic text-gold-foil">Visualizer</span>
+            <h1 className="font-serif text-3xl md:text-5xl uppercase tracking-wide text-silver-100">
+              Room <span className="italic text-garnet-foil">Visualizer</span>
             </h1>
           </div>
 
@@ -1260,7 +1180,7 @@ export default function VisualizerClient() {
             {/* AI Consultant Button */}
             <button
               onClick={() => setIsConsultantOpen(true)}
-              className="inline-flex items-center gap-2 px-4 py-2.5 bg-gold-400/10 border border-gold-400/30 text-xs font-bold uppercase tracking-wider rounded-lg text-gold-400 hover:bg-gold-400 hover:text-stone-950 transition-all shadow-md shadow-gold-500/5"
+              className="inline-flex items-center gap-2 px-4 py-2.5 bg-garnet-500/10 border border-garnet-400/30 text-xs font-bold uppercase tracking-wider rounded-lg text-garnet-400 hover:bg-garnet-500 hover:text-silver-50 transition-all shadow-md shadow-garnet-900/10"
             >
               <MessageSquare className="w-4 h-4" />
               <span>AI Consultant</span>
@@ -1271,8 +1191,8 @@ export default function VisualizerClient() {
               onClick={() => setCompareMode(!compareMode)}
               className={`inline-flex items-center gap-2 px-4 py-2.5 border text-xs font-bold uppercase tracking-wider rounded-lg transition-colors ${
                 compareMode 
-                  ? 'bg-gold-400/20 border-gold-400 text-gold-400' 
-                  : 'bg-stone-900 border-stone-850 text-stone-400 hover:text-white hover:bg-stone-850'
+                  ? 'bg-garnet-500/20 border-garnet-400 text-garnet-400' 
+                  : 'bg-stone-900 border-stone-800 text-silver-300 hover:text-silver-50 hover:bg-stone-800'
               }`}
             >
               <Sliders className="w-4 h-4" />
@@ -1282,16 +1202,16 @@ export default function VisualizerClient() {
             {/* Before/After Toggle */}
             <button
               onClick={() => setViewMode(viewMode === 'after' ? 'before' : 'after')}
-              className="inline-flex items-center gap-2 px-4 py-2.5 bg-stone-900 border border-stone-800 text-xs font-bold uppercase tracking-wider rounded-lg text-white hover:bg-stone-850 transition-colors"
+              className="inline-flex items-center gap-2 px-4 py-2.5 bg-stone-900 border border-stone-800 text-xs font-bold uppercase tracking-wider rounded-lg text-silver-100 hover:bg-stone-800 transition-colors"
             >
-              <Eye className="w-4 h-4 text-gold-400" />
+              <Eye className="w-4 h-4 text-garnet-400" />
               <span>{viewMode === 'after' ? 'Show Before' : 'Show After'}</span>
             </button>
 
             {/* Reset handles / clear regions */}
             <button
               onClick={handleResetPoints}
-              className="inline-flex items-center gap-2 px-4 py-2.5 bg-stone-900/50 border border-stone-900 text-xs font-bold uppercase tracking-wider rounded-lg text-stone-400 hover:text-white hover:bg-stone-900 transition-colors"
+              className="inline-flex items-center gap-2 px-4 py-2.5 bg-stone-900/50 border border-stone-900 text-xs font-bold uppercase tracking-wider rounded-lg text-stone-400 hover:text-silver-100 hover:bg-stone-900 transition-colors"
               title={activeRegionId ? "Reset Current Handles" : "Clear All Regions"}
             >
               <RotateCcw className="w-4 h-4" />
@@ -1309,7 +1229,7 @@ export default function VisualizerClient() {
               onDragOver={handleDragOver}
               onDrop={handleDrop}
               onDragLeave={() => setHoveredRegionId(null)}
-              className="relative w-full rounded-xl overflow-hidden border border-stone-850 bg-stone-950 shadow-2xl select-none touch-none"
+              className="relative w-full rounded-xl overflow-hidden border border-stone-800 bg-stone-950 shadow-2xl select-none touch-none"
             >
               <canvas
                 ref={canvasRef}
@@ -1325,10 +1245,10 @@ export default function VisualizerClient() {
             </div>
             
             {/* Visualizer Instructions Banner */}
-            <div className="p-4 bg-gold-400/5 border border-gold-400/10 rounded-lg text-xs leading-relaxed text-stone-400 flex gap-3">
-              <Sparkles className="w-5 h-5 text-gold-400 shrink-0" />
+            <div className="p-4 bg-garnet-500/5 border border-garnet-400/10 rounded-lg text-xs leading-relaxed text-silver-300 flex gap-3">
+              <Sparkles className="w-5 h-5 text-garnet-400 shrink-0" />
               <div>
-                <span className="font-bold text-white uppercase tracking-wider block mb-1">Smart Wall Detection & Drag-and-Drop Swatches</span>
+                <span className="font-bold text-silver-100 uppercase tracking-wider block mb-1">Smart Wall Detection & Drag-and-Drop Swatches</span>
                 <span>
                   Tap anywhere on a wall or floor to segment a region. Drag swatches from the sidebar and drop them onto segmented regions to apply materials, or tap a region and select a swatch. Drag the four corner handles to align perspective.
                 </span>
@@ -1340,8 +1260,8 @@ export default function VisualizerClient() {
           <div className="flex flex-col gap-6">
             
             {/* 1. Room selection options */}
-            <div className="border border-stone-900 rounded-xl p-6 bg-stone-900/10">
-              <h3 className="text-xs font-bold uppercase tracking-widest text-white mb-4 border-b border-stone-900 pb-3">
+            <div className="border border-stone-900 rounded-xl p-6 bg-stone-900/30">
+              <h3 className="text-xs font-bold uppercase tracking-widest text-silver-100 mb-4 border-b border-stone-900 pb-3">
                 1. Select Room Template
               </h3>
               
@@ -1352,8 +1272,8 @@ export default function VisualizerClient() {
                     onClick={() => setSelectedRoom(room.url)}
                     className={`px-3 py-2 rounded text-[10px] font-bold uppercase tracking-wider border text-center transition-all ${
                       selectedRoom === room.url 
-                        ? 'bg-gold-400 border-gold-400 text-stone-950' 
-                        : 'bg-stone-900 border-stone-850 text-stone-400 hover:text-white'
+                        ? 'bg-garnet-500 border-garnet-500 text-silver-50 shadow-md shadow-garnet-900/30' 
+                        : 'bg-stone-900 border-stone-800 text-silver-300 hover:text-silver-50'
                     }`}
                   >
                     {room.name}
@@ -1363,8 +1283,8 @@ export default function VisualizerClient() {
 
               {/* Upload custom room photo */}
               <div className="flex flex-col gap-2">
-                <label className="flex items-center justify-center gap-2 px-4 py-3 bg-stone-900 border border-stone-800 border-dashed rounded-lg text-xs font-semibold uppercase tracking-wider text-stone-400 hover:text-white hover:border-stone-600 cursor-pointer transition-colors">
-                  <Upload className="w-4 h-4 text-gold-400" />
+                <label className="flex items-center justify-center gap-2 px-4 py-3 bg-stone-900 border border-stone-800 border-dashed rounded-lg text-xs font-semibold uppercase tracking-wider text-silver-300 hover:text-silver-50 hover:border-garnet-400/40 cursor-pointer transition-colors">
+                  <Upload className="w-4 h-4 text-garnet-400" />
                   <span>Upload Your Room Photo</span>
                   <input
                     type="file"
@@ -1374,14 +1294,14 @@ export default function VisualizerClient() {
                   />
                 </label>
                 {uploadError && (
-                  <p className="text-[10px] text-red-500 font-medium">{uploadError}</p>
+                  <p className="text-[10px] text-garnet-400 font-medium">{uploadError}</p>
                 )}
               </div>
             </div>
 
             {/* 2. Active Regions Panel */}
-            <div className="border border-stone-900 rounded-xl p-6 bg-stone-900/10">
-              <h3 className="text-xs font-bold uppercase tracking-widest text-white mb-4 border-b border-stone-900 pb-3 flex justify-between items-center">
+            <div className="border border-stone-900 rounded-xl p-6 bg-stone-900/30">
+              <h3 className="text-xs font-bold uppercase tracking-widest text-silver-100 mb-4 border-b border-stone-900 pb-3 flex justify-between items-center">
                 <span>2. Active Regions</span>
                 {maskedRegions.length > 0 && (
                   <button 
@@ -1389,7 +1309,7 @@ export default function VisualizerClient() {
                       setMaskedRegions([]);
                       setActiveRegionId(null);
                     }}
-                    className="text-[10px] text-stone-500 hover:text-white uppercase font-bold tracking-wider transition-colors"
+                    className="text-[10px] text-stone-500 hover:text-silver-100 uppercase font-bold tracking-wider transition-colors"
                   >
                     Clear All
                   </button>
@@ -1397,19 +1317,19 @@ export default function VisualizerClient() {
               </h3>
 
               {isScanning ? (
-                <div className="flex flex-col items-center justify-center py-6 text-stone-500 gap-3">
-                  <Loader2 className="w-6 h-6 animate-spin text-gold-400" />
+                <div className="flex flex-col items-center justify-center py-6 text-silver-300 gap-3">
+                  <Loader2 className="w-6 h-6 animate-spin text-garnet-400" />
                   <span className="text-[10px] uppercase font-bold tracking-wider animate-pulse">{scanMessage}</span>
-                  <div className="w-full bg-stone-950 rounded-full h-1 max-w-[200px] overflow-hidden border border-stone-850">
+                  <div className="w-full bg-stone-950 rounded-full h-1 max-w-[200px] overflow-hidden border border-stone-800">
                     <div 
-                      className="bg-gold-400 h-full rounded-full transition-all duration-300 ease-out" 
+                      className="bg-garnet-500 h-full rounded-full transition-all duration-300 ease-out" 
                       style={{ width: `${scanProgress}%` }}
                     />
                   </div>
                 </div>
               ) : maskedRegions.length === 0 ? (
-                <div className="text-center py-6 text-stone-500 text-[11px] leading-relaxed">
-                  <Sparkles className="w-5 h-5 text-gold-400/40 mx-auto mb-2" />
+                <div className="text-center py-6 text-stone-400 text-[11px] leading-relaxed">
+                  <Sparkles className="w-5 h-5 text-garnet-400/40 mx-auto mb-2" />
                   Tap anywhere on the room photo to segment a wall/floor region and apply textures.
                 </div>
               ) : (
@@ -1422,21 +1342,21 @@ export default function VisualizerClient() {
                         onClick={() => setActiveRegionId(region.id)}
                         className={`p-3 rounded-lg border transition-all cursor-pointer ${
                           isActive 
-                            ? 'border-gold-400 bg-gold-400/5' 
-                            : 'border-stone-900 bg-stone-950/20 hover:border-stone-800'
+                            ? 'border-garnet-400 bg-garnet-500/10' 
+                            : 'border-stone-900 bg-stone-950/40 hover:border-stone-800'
                         }`}
                       >
                         <div className="flex items-center justify-between gap-3 mb-2">
                           <div className="flex items-center gap-2 min-w-0">
-                            <div className="w-2 h-2 rounded-full bg-gold-400 shrink-0" />
-                            <span className="text-[10px] text-white font-bold truncate uppercase tracking-wider">{region.name}</span>
+                            <div className="w-2 h-2 rounded-full bg-garnet-400 shrink-0" />
+                            <span className="text-[10px] text-silver-100 font-bold truncate uppercase tracking-wider">{region.name}</span>
                           </div>
                           <button 
                             onClick={(e) => {
                               e.stopPropagation();
                               handleDeleteRegion(region.id);
                             }}
-                            className="text-stone-500 hover:text-red-400 transition-colors p-1"
+                            className="text-stone-500 hover:text-garnet-400 transition-colors p-1"
                             title="Remove Region"
                           >
                             <X className="w-4 h-4" />
@@ -1454,19 +1374,19 @@ export default function VisualizerClient() {
                             />
                           </div>
                           <div className="flex-1 min-w-0">
-                            <span className="text-[9px] text-stone-300 font-bold block truncate">{region.product.name}</span>
-                            <span className="text-[8px] text-gold-400 font-bold block mt-0.5">{region.product.priceRange}</span>
+                            <span className="text-[9px] text-silver-200 font-bold block truncate">{region.product.name}</span>
+                            <span className="text-[8px] text-garnet-400 font-bold block mt-0.5">{region.product.priceRange}</span>
                           </div>
                         </div>
 
                         {/* Opacity slider */}
                         <div className="flex flex-col gap-1.5" onClick={e => e.stopPropagation()}>
-                          <div className="flex justify-between text-[8px] text-stone-500 uppercase tracking-widest font-bold">
+                          <div className="flex justify-between text-[8px] text-stone-400 uppercase tracking-widest font-bold">
                             <span>Material Opacity</span>
-                            <span className="font-mono text-stone-300">{Math.round(region.opacity * 100)}%</span>
+                            <span className="font-mono text-silver-200">{Math.round(region.opacity * 100)}%</span>
                           </div>
                           <div className="flex items-center gap-2">
-                            <span className="text-[8px] text-stone-600 font-bold">65%</span>
+                            <span className="text-[8px] text-stone-500 font-bold">65%</span>
                             <input
                               type="range"
                               min="0.65"
@@ -1477,9 +1397,9 @@ export default function VisualizerClient() {
                                 const val = parseFloat(e.target.value);
                                 setMaskedRegions(prev => prev.map(r => r.id === region.id ? { ...r, opacity: val } : r));
                               }}
-                              className="flex-1 h-1 bg-stone-900 rounded-lg appearance-none cursor-pointer accent-gold-400"
+                              className="flex-1 h-1 bg-stone-900 rounded-lg appearance-none cursor-pointer accent-garnet-500"
                             />
-                            <span className="text-[8px] text-stone-600 font-bold">100%</span>
+                            <span className="text-[8px] text-stone-500 font-bold">100%</span>
                           </div>
                         </div>
                       </div>
@@ -1490,8 +1410,8 @@ export default function VisualizerClient() {
             </div>
 
             {/* 3. Main Material Selection */}
-            <div className="border border-stone-900 rounded-xl p-6 bg-stone-900/10">
-              <h3 className="text-xs font-bold uppercase tracking-widest text-white mb-4 border-b border-stone-900 pb-3">
+            <div className="border border-stone-900 rounded-xl p-6 bg-stone-900/30">
+              <h3 className="text-xs font-bold uppercase tracking-widest text-silver-100 mb-4 border-b border-stone-900 pb-3">
                 {compareMode ? '3. Select Material A (Left Side)' : '3. Choose Stone Material'}
               </h3>
               
@@ -1506,8 +1426,8 @@ export default function VisualizerClient() {
                     onClick={() => handleProductSelect(prod)}
                     className={`flex items-center gap-3 p-2 rounded-lg border text-left transition-all cursor-grab active:cursor-grabbing ${
                       currentActiveProduct?.slug === prod.slug
-                        ? 'border-gold-400 bg-gold-400/5'
-                        : 'border-stone-900 hover:border-stone-850'
+                        ? 'border-garnet-400 bg-garnet-500/10'
+                        : 'border-stone-900 hover:border-stone-800'
                     }`}
                   >
                     <div className="relative w-10 h-10 rounded overflow-hidden bg-stone-900 shrink-0 border border-stone-800">
@@ -1520,15 +1440,15 @@ export default function VisualizerClient() {
                       />
                     </div>
                     <div className="flex-1 min-w-0">
-                      <span className="text-[10px] text-white font-medium block truncate">
+                      <span className="text-[10px] text-silver-100 font-medium block truncate">
                         {prod.name}
                       </span>
-                      <span className="text-[9px] text-stone-500 font-bold uppercase block mt-0.5">
+                      <span className="text-[9px] text-stone-400 font-bold uppercase block mt-0.5">
                         {prod.priceRange}
                       </span>
                     </div>
                     {currentActiveProduct?.slug === prod.slug && (
-                      <div className="w-4 h-4 rounded-full bg-gold-400 flex items-center justify-center text-stone-950">
+                      <div className="w-4 h-4 rounded-full bg-garnet-500 flex items-center justify-center text-silver-50">
                         <Check className="w-3 stroke-[3]" />
                       </div>
                     )}
@@ -1538,7 +1458,7 @@ export default function VisualizerClient() {
 
               {/* Lot Sourcing Inventory Selector */}
               <div className="mt-4 pt-4 border-t border-stone-900/60">
-                <span className="text-[9px] text-stone-500 uppercase tracking-widest font-bold block mb-2.5">
+                <span className="text-[9px] text-stone-400 uppercase tracking-widest font-bold block mb-2.5">
                   Select Active Quarry Slab Lot
                 </span>
                 <div className="grid grid-cols-3 gap-2">
@@ -1555,12 +1475,12 @@ export default function VisualizerClient() {
                       }}
                       className={`flex flex-col p-2 border rounded text-center transition-all ${
                         selectedLot === lot.id
-                          ? 'bg-gold-400 border-gold-400 text-stone-950 font-bold'
-                          : 'bg-stone-950 border-stone-850 text-stone-400 hover:border-stone-800'
+                          ? 'bg-garnet-500 border-garnet-500 text-silver-50 font-bold'
+                          : 'bg-stone-950 border-stone-800 text-stone-400 hover:border-stone-700'
                       }`}
                     >
                       <span className="text-[9px] uppercase tracking-wider block">{lot.label}</span>
-                      <span className={`text-[8px] mt-0.5 ${selectedLot === lot.id ? 'text-stone-900/80' : 'text-stone-500'}`}>{lot.details}</span>
+                      <span className={`text-[8px] mt-0.5 ${selectedLot === lot.id ? 'text-silver-100/90' : 'text-stone-500'}`}>{lot.details}</span>
                     </button>
                   ))}
                 </div>
@@ -1569,8 +1489,8 @@ export default function VisualizerClient() {
 
             {/* 4. Compare Material Selection (Only visible if compareMode is active) */}
             {compareMode && (
-              <div className="border border-gold-500/20 rounded-xl p-6 bg-stone-900/10 animate-in slide-in-from-top duration-300">
-                <h3 className="text-xs font-bold uppercase tracking-widest text-gold-400 mb-4 border-b border-stone-900 pb-3">
+              <div className="border border-garnet-500/30 rounded-xl p-6 bg-stone-900/30 animate-in slide-in-from-top duration-300">
+                <h3 className="text-xs font-bold uppercase tracking-widest text-garnet-400 mb-4 border-b border-stone-900 pb-3">
                   4. Select Compare Material (Right Side)
                 </h3>
                 
@@ -1581,8 +1501,8 @@ export default function VisualizerClient() {
                       onClick={() => setCompareProduct(prod)}
                       className={`flex items-center gap-3 p-2 rounded-lg border text-left transition-all ${
                         compareProduct.slug === prod.slug
-                          ? 'border-gold-400 bg-gold-400/5'
-                          : 'border-stone-900 hover:border-stone-850'
+                          ? 'border-garnet-400 bg-garnet-500/10'
+                          : 'border-stone-900 hover:border-stone-800'
                       }`}
                     >
                       <div className="relative w-10 h-10 rounded overflow-hidden bg-stone-900 shrink-0 border border-stone-800">
@@ -1595,15 +1515,15 @@ export default function VisualizerClient() {
                         />
                       </div>
                       <div className="flex-1 min-w-0">
-                        <span className="text-[10px] text-white font-medium block truncate">
+                        <span className="text-[10px] text-silver-100 font-medium block truncate">
                           {prod.name}
                         </span>
-                        <span className="text-[9px] text-stone-500 font-bold uppercase block mt-0.5">
+                        <span className="text-[9px] text-stone-400 font-bold uppercase block mt-0.5">
                           {prod.priceRange}
                         </span>
                       </div>
                       {compareProduct.slug === prod.slug && (
-                        <div className="w-4 h-4 rounded-full bg-gold-400 flex items-center justify-center text-stone-950">
+                        <div className="w-4 h-4 rounded-full bg-garnet-500 flex items-center justify-center text-silver-50">
                           <Check className="w-3 stroke-[3]" />
                         </div>
                       )}
@@ -1618,7 +1538,7 @@ export default function VisualizerClient() {
               {/* Sourcing Estimate Button */}
               <button
                 onClick={() => setIsQuoteModalOpen(true)}
-                className="w-full inline-flex items-center justify-center gap-2.5 px-8 py-3.5 bg-gold-400/10 border border-gold-400/30 text-gold-400 hover:bg-gold-400 hover:text-stone-950 transition-all font-bold text-xs uppercase tracking-widest rounded-full"
+                className="w-full inline-flex items-center justify-center gap-2.5 px-8 py-3.5 bg-garnet-500/10 border border-garnet-400/30 text-garnet-400 hover:bg-garnet-500 hover:text-silver-50 transition-all font-bold text-xs uppercase tracking-widest rounded-full"
               >
                 <Calculator className="w-4 h-4" />
                 <span>Calculate Sourcing Estimate</span>
@@ -1626,15 +1546,15 @@ export default function VisualizerClient() {
 
               <button
                 onClick={handleDownload}
-                className="w-full inline-flex items-center justify-center gap-2.5 px-8 py-3.5 bg-stone-900 border border-stone-850 text-white hover:bg-stone-850 hover:border-stone-750 transition-colors font-bold text-xs uppercase tracking-widest rounded-full"
+                className="w-full inline-flex items-center justify-center gap-2.5 px-8 py-3.5 bg-stone-900 border border-stone-800 text-silver-100 hover:bg-stone-800 hover:border-stone-700 transition-colors font-bold text-xs uppercase tracking-widest rounded-full"
               >
-                <Download className="w-4 h-4 text-gold-400" />
+                <Download className="w-4 h-4 text-garnet-400" />
                 <span>Download Slabs Preview</span>
               </button>
               
               <a
                 href={waEnquiryUrl()}
-                className="w-full inline-flex items-center justify-center gap-2.5 px-8 py-3.5 bg-gradient-to-r from-gold-500 to-gold-600 text-stone-950 font-bold text-xs uppercase tracking-widest rounded-full transition-transform hover:scale-105 shadow-lg shadow-gold-500/20"
+                className="w-full inline-flex items-center justify-center gap-2.5 px-8 py-3.5 bg-gradient-to-r from-garnet-500 to-garnet-600 hover:from-garnet-600 hover:to-garnet-700 text-silver-50 font-bold text-xs uppercase tracking-widest rounded-full transition-transform hover:scale-[1.02] active:scale-[0.98] shadow-lg shadow-garnet-900/30 border border-garnet-400/30"
                 target="_blank"
                 rel="noopener noreferrer"
               >
@@ -1652,7 +1572,7 @@ export default function VisualizerClient() {
       {/* A. Sourcing Quote Estimate Calculator Modal */}
       {isQuoteModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-stone-950/85 backdrop-blur-md">
-          <div className="relative w-full max-w-2xl bg-stone-900 border border-stone-800 rounded-2xl overflow-hidden shadow-2xl p-6 md:p-8 max-h-[90vh] overflow-y-auto text-stone-300 font-sans text-xs flex flex-col gap-6 animate-in zoom-in-95 duration-250" data-lenis-prevent>
+          <div className="relative w-full max-w-2xl bg-stone-900 border border-stone-800 rounded-2xl overflow-hidden shadow-2xl p-6 md:p-8 max-h-[90vh] overflow-y-auto text-silver-300 font-sans text-xs flex flex-col gap-6 animate-in zoom-in-95 duration-250" data-lenis-prevent>
             <button 
               onClick={() => setIsQuoteModalOpen(false)}
               className="absolute top-4 right-4 text-stone-500 hover:text-white transition-colors"
@@ -1661,30 +1581,30 @@ export default function VisualizerClient() {
             </button>
 
             <div>
-              <span className="text-gold-400 text-[10px] font-bold uppercase tracking-[0.2em] block mb-1">Costing Estimator</span>
-              <h3 className="font-serif text-2xl text-white uppercase tracking-wider">
+              <span className="text-garnet-400 text-[10px] font-bold uppercase tracking-[0.2em] block mb-1">Costing Estimator</span>
+              <h3 className="font-serif text-2xl text-silver-100 uppercase tracking-wider">
                 Sourcing Quote Summary
               </h3>
             </div>
 
             {/* Inputs Block */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 p-5 bg-stone-950 rounded-xl border border-stone-850">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 p-5 bg-stone-950 rounded-xl border border-stone-800">
               <div className="flex flex-col gap-2">
-                <label className="font-bold text-white uppercase tracking-wider text-[10px]">Project Area (Sq Ft)</label>
+                <label className="font-bold text-silver-100 uppercase tracking-wider text-[10px]">Project Area (Sq Ft)</label>
                 <input
                   type="number"
                   value={quoteArea}
                   onChange={(e) => setQuoteArea(Math.max(1, parseInt(e.target.value) || 0))}
-                  className="bg-stone-900 border border-stone-800 rounded px-3 py-2 text-white font-mono focus:outline-none focus:border-gold-400"
+                  className="bg-stone-900 border border-stone-800 rounded px-3 py-2 text-silver-100 font-mono focus:outline-none focus:border-garnet-400"
                 />
               </div>
 
               <div className="flex flex-col gap-2">
-                <label className="font-bold text-white uppercase tracking-wider text-[10px]">Wastage Allowance</label>
+                <label className="font-bold text-silver-100 uppercase tracking-wider text-[10px]">Wastage Allowance</label>
                 <select
                   value={quoteWastage}
                   onChange={(e) => setQuoteWastage(parseInt(e.target.value))}
-                  className="bg-stone-900 border border-stone-800 rounded px-3 py-2 text-white focus:outline-none focus:border-gold-400 cursor-pointer"
+                  className="bg-stone-900 border border-stone-800 rounded px-3 py-2 text-silver-100 focus:outline-none focus:border-garnet-400 cursor-pointer"
                 >
                   <option value="5">5% (Simple cuts)</option>
                   <option value="10">10% (Diagonal laying)</option>
@@ -1693,12 +1613,12 @@ export default function VisualizerClient() {
               </div>
 
               <div className="flex flex-col gap-2">
-                <label className="font-bold text-white uppercase tracking-wider text-[10px]">Delivery Location</label>
+                <label className="font-bold text-silver-100 uppercase tracking-wider text-[10px]">Delivery Location</label>
                 <input
                   type="text"
                   value={quoteClientLocation}
                   onChange={(e) => setQuoteClientLocation(e.target.value)}
-                  className="bg-stone-900 border border-stone-800 rounded px-3 py-2 text-white focus:outline-none focus:border-gold-400"
+                  className="bg-stone-900 border border-stone-800 rounded px-3 py-2 text-silver-100 focus:outline-none focus:border-garnet-400"
                   placeholder="e.g. Shankar Nagar Jodhpur"
                 />
               </div>
@@ -1706,52 +1626,52 @@ export default function VisualizerClient() {
 
             {/* Receipt Invoice Sheet */}
             <div className="border border-stone-800 rounded-xl p-6 bg-stone-950 font-mono text-[11px] leading-relaxed relative overflow-hidden">
-              <div className="absolute top-4 right-4 text-[9px] uppercase tracking-widest text-stone-800 font-bold border border-stone-850 px-2 py-0.5">
+              <div className="absolute top-4 right-4 text-[9px] uppercase tracking-widest text-stone-500 font-bold border border-stone-800 px-2 py-0.5">
                 Estimator Draft
               </div>
 
-              <div className="border-b border-dashed border-stone-850 pb-4 mb-4">
-                <h4 className="font-serif text-sm text-white uppercase tracking-widest font-bold">ANGEL STONE STUDIO JODHPUR</h4>
-                <p className="text-[10px] text-stone-600 uppercase tracking-wider mt-1">Custom Material & Slab Estimate</p>
+              <div className="border-b border-dashed border-stone-800 pb-4 mb-4">
+                <h4 className="font-serif text-sm text-silver-100 uppercase tracking-widest font-bold">ANGEL STONE STUDIO JODHPUR</h4>
+                <p className="text-[10px] text-stone-400 uppercase tracking-wider mt-1">Custom Material & Slab Estimate</p>
               </div>
 
-              <div className="space-y-2 mb-4 text-stone-400 border-b border-dashed border-stone-850 pb-4">
+              <div className="space-y-2 mb-4 text-silver-300 border-b border-dashed border-stone-800 pb-4">
                 <div className="flex justify-between">
                   <span>Product Model:</span>
-                  <span className="text-white font-bold uppercase">{selectedProduct.name}</span>
+                  <span className="text-silver-100 font-bold uppercase">{selectedProduct.name}</span>
                 </div>
                 <div className="flex justify-between">
                   <span>Lot / Slab Selection:</span>
-                  <span className="text-white font-bold uppercase">{selectedLot.toUpperCase()}</span>
+                  <span className="text-silver-100 font-bold uppercase">{selectedLot.toUpperCase()}</span>
                 </div>
                 <div className="flex justify-between">
                   <span>Project Area:</span>
-                  <span className="text-white">{quoteArea.toLocaleString()} sq ft</span>
+                  <span className="text-silver-100">{quoteArea.toLocaleString()} sq ft</span>
                 </div>
                 <div className="flex justify-between">
                   <span>Material Price Rate:</span>
-                  <span className="text-gold-400 font-bold">{selectedProduct.priceRange}</span>
+                  <span className="text-garnet-400 font-bold">{selectedProduct.priceRange}</span>
                 </div>
                 <div className="flex justify-between">
                   <span>Estimated Material (incl. {quoteWastage}% wastage):</span>
-                  <span className="text-white">{calcResult.totalAreaNeeded.toFixed(0)} sq ft</span>
+                  <span className="text-silver-100">{calcResult.totalAreaNeeded.toFixed(0)} sq ft</span>
                 </div>
               </div>
 
-              <div className="space-y-2.5 font-semibold text-stone-300">
+              <div className="space-y-2.5 font-semibold text-silver-200">
                 <div className="flex justify-between">
                   <span>Estimated Slabs Cost:</span>
                   <span>₹{calcResult.subtotalMin.toLocaleString('en-IN')} - ₹{calcResult.subtotalMax.toLocaleString('en-IN')}</span>
                 </div>
-                <div className="flex justify-between text-stone-500 font-normal">
+                <div className="flex justify-between text-stone-400 font-normal">
                   <span>GST Surcharge (18%):</span>
                   <span>₹{calcResult.gstMin.toLocaleString('en-IN')} - ₹{calcResult.gstMax.toLocaleString('en-IN')}</span>
                 </div>
-                <div className="flex justify-between text-stone-500 font-normal">
+                <div className="flex justify-between text-stone-400 font-normal">
                   <span>Loading & Yard Handling flat fee:</span>
                   <span>₹{calcResult.handling.toLocaleString('en-IN')}</span>
                 </div>
-                <div className="flex justify-between text-base font-serif text-gold-400 pt-3 border-t border-double border-stone-800">
+                <div className="flex justify-between text-base font-serif text-garnet-400 pt-3 border-t border-double border-stone-800">
                   <span>TOTAL ESTIMATED PRICE (RETAIL & SOURCING):</span>
                   <span className="font-bold">₹{calcResult.totalMin.toLocaleString('en-IN')} - ₹{calcResult.totalMax.toLocaleString('en-IN')}</span>
                 </div>
@@ -1762,7 +1682,7 @@ export default function VisualizerClient() {
             <div className="flex flex-col sm:flex-row gap-3 pt-2">
               <button 
                 onClick={() => window.print()}
-                className="flex-1 px-6 py-3 border border-stone-800 hover:border-white transition-colors text-white font-bold text-xs uppercase tracking-widest rounded-full"
+                className="flex-1 px-6 py-3 border border-stone-800 hover:border-silver-100 transition-colors text-silver-100 font-bold text-xs uppercase tracking-widest rounded-full"
               >
                 Print Project Estimate
               </button>
@@ -1771,7 +1691,7 @@ export default function VisualizerClient() {
                 href={waQuoteUrl()}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="flex-1 inline-flex items-center justify-center gap-2 px-6 py-3 bg-gradient-to-r from-gold-500 to-gold-600 text-stone-950 font-bold text-xs uppercase tracking-widest rounded-full transition-transform hover:scale-105 shadow-lg shadow-gold-500/20"
+                className="flex-1 inline-flex items-center justify-center gap-2 px-6 py-3 bg-gradient-to-r from-garnet-500 to-garnet-600 text-silver-50 font-bold text-xs uppercase tracking-widest rounded-full transition-transform hover:scale-105 shadow-lg shadow-garnet-900/30"
               >
                 <Phone className="w-3.5 h-3.5" />
                 <span>Confirm & Send on WhatsApp</span>
@@ -1794,12 +1714,12 @@ export default function VisualizerClient() {
               className="fixed right-0 top-0 bottom-0 z-50 w-full md:w-[450px] bg-stone-900/95 backdrop-blur-xl border-l border-stone-800 flex flex-col justify-between shadow-2xl animate-in slide-in-from-right duration-300"
             >
               {/* Header */}
-              <div className="p-5 border-b border-stone-850 flex items-center justify-between">
+              <div className="p-5 border-b border-stone-800 flex items-center justify-between">
                 <div className="flex items-center gap-2">
-                  <div className="w-2.5 h-2.5 rounded-full bg-gold-500 animate-pulse" />
+                  <div className="w-2.5 h-2.5 rounded-full bg-garnet-500 animate-pulse" />
                   <div>
-                    <h3 className="font-serif text-sm text-white uppercase tracking-wider font-bold">AI Design Consultant</h3>
-                    <span className="text-[9px] text-stone-500 font-semibold block uppercase">Studio Sourcing Assistant</span>
+                    <h3 className="font-serif text-sm text-silver-100 uppercase tracking-wider font-bold">AI Design Consultant</h3>
+                    <span className="text-[9px] text-stone-400 font-semibold block uppercase">Studio Sourcing Assistant</span>
                   </div>
                 </div>
                 <button 
@@ -1822,8 +1742,8 @@ export default function VisualizerClient() {
                     <div 
                       className={`p-4 rounded-2xl leading-relaxed ${
                         msg.sender === 'user' 
-                          ? 'bg-gradient-to-r from-gold-500 to-gold-600 text-stone-950 font-semibold rounded-tr-none'
-                          : 'bg-stone-950 border border-stone-850 text-stone-300 rounded-tl-none'
+                          ? 'bg-gradient-to-r from-garnet-500 to-garnet-600 text-silver-50 font-semibold rounded-tr-none'
+                          : 'bg-stone-950 border border-stone-800 text-silver-200 rounded-tl-none'
                       }`}
                     >
                       {msg.text}
@@ -1834,7 +1754,7 @@ export default function VisualizerClient() {
                         {msg.products.map(p => (
                           <div 
                             key={p.slug}
-                            className="bg-stone-950/80 border border-stone-850 rounded-xl p-3 flex items-center gap-3"
+                            className="bg-stone-950/80 border border-stone-800 rounded-xl p-3 flex items-center gap-3"
                           >
                             <div className="relative w-12 h-12 bg-stone-900 rounded overflow-hidden border border-stone-800">
                               <Image 
@@ -1845,21 +1765,21 @@ export default function VisualizerClient() {
                               />
                             </div>
                             <div className="flex-1 min-w-0">
-                              <span className="text-[10px] text-white font-bold block truncate">{p.name}</span>
-                              <span className="text-[9px] text-gold-400 font-bold block mt-0.5">{p.priceRange}</span>
+                              <span className="text-[10px] text-silver-100 font-bold block truncate">{p.name}</span>
+                              <span className="text-[9px] text-garnet-400 font-bold block mt-0.5">{p.priceRange}</span>
                               <div className="flex gap-2 mt-1.5">
                                 <button
                                   onClick={() => handleProductSelect(p)}
-                                  className="text-[9px] text-stone-400 hover:text-white transition-colors uppercase font-bold"
+                                  className="text-[9px] text-silver-300 hover:text-silver-50 transition-colors uppercase font-bold"
                                 >
                                   Apply Material
                                 </button>
                                 <span className="text-stone-700 text-[9px]">•</span>
                                 <a
-                                  href={`https://wa.me/918147941542?text=Hi%20Angel%20Tiles%20Jodhpur,%20I%20am%20enquiring%20about%20the%20${encodeURIComponent(p.name)}%20lot%20recommended%20by%20AI%20consultant.`}
+                                  href={`https://wa.me/919929548511?text=Hi%20Angel%20Tiles%20Jodhpur,%20I%20am%20enquiring%20about%20the%20${encodeURIComponent(p.name)}%20lot%20recommended%20by%20AI%20consultant.`}
                                   target="_blank"
                                   rel="noopener noreferrer"
-                                  className="text-[9px] text-gold-400 hover:text-white transition-colors uppercase font-bold"
+                                  className="text-[9px] text-garnet-400 hover:text-silver-50 transition-colors uppercase font-bold"
                                 >
                                   Enquire
                                 </a>
@@ -1874,9 +1794,9 @@ export default function VisualizerClient() {
 
                 {isTyping && (
                   <div className="flex items-center gap-1.5 text-stone-500 mr-auto ml-1">
-                    <span className="w-1.5 h-1.5 bg-gold-400 rounded-full animate-bounce" />
-                    <span className="w-1.5 h-1.5 bg-gold-400 rounded-full animate-bounce [animation-delay:0.2s]" />
-                    <span className="w-1.5 h-1.5 bg-gold-400 rounded-full animate-bounce [animation-delay:0.4s]" />
+                    <span className="w-1.5 h-1.5 bg-garnet-400 rounded-full animate-bounce" />
+                    <span className="w-1.5 h-1.5 bg-garnet-400 rounded-full animate-bounce [animation-delay:0.2s]" />
+                    <span className="w-1.5 h-1.5 bg-garnet-400 rounded-full animate-bounce [animation-delay:0.4s]" />
                   </div>
                 )}
 
@@ -1884,7 +1804,7 @@ export default function VisualizerClient() {
               </div>
 
               {/* Bottom input area */}
-              <div className="p-4 border-t border-stone-850 bg-stone-950 flex flex-col gap-3">
+              <div className="p-4 border-t border-stone-800 bg-stone-950 flex flex-col gap-3">
                 <div className="flex flex-wrap gap-2">
                   {[
                     "Statuario for Living Room",
@@ -1895,7 +1815,7 @@ export default function VisualizerClient() {
                     <button
                       key={tag}
                       onClick={() => handleConsultantSend(tag)}
-                      className="px-2.5 py-1.5 bg-stone-900 border border-stone-800 hover:border-gold-400 hover:text-white rounded-full text-[9px] font-medium tracking-wider text-stone-400 transition-colors"
+                      className="px-2.5 py-1.5 bg-stone-900 border border-stone-800 hover:border-garnet-400 hover:text-silver-50 rounded-full text-[9px] font-medium tracking-wider text-silver-300 transition-colors"
                     >
                       {tag}
                     </button>
@@ -1909,11 +1829,11 @@ export default function VisualizerClient() {
                     onChange={(e) => setInputMessage(e.target.value)}
                     onKeyDown={(e) => e.key === 'Enter' && handleConsultantSend(inputMessage)}
                     placeholder="Describe your space requirements..."
-                    className="flex-1 bg-stone-900 border border-stone-800 rounded-full px-4 py-2.5 text-white focus:outline-none focus:border-gold-400 text-xs"
+                    className="flex-1 bg-stone-900 border border-stone-800 rounded-full px-4 py-2.5 text-silver-100 focus:outline-none focus:border-garnet-400 text-xs"
                   />
                   <button
                     onClick={() => handleConsultantSend(inputMessage)}
-                    className="p-2.5 bg-gold-400 hover:bg-gold-500 text-stone-950 rounded-full flex items-center justify-center active:scale-95 transition-transform shrink-0"
+                    className="p-2.5 bg-garnet-500 hover:bg-garnet-600 text-silver-50 rounded-full flex items-center justify-center active:scale-95 transition-transform shrink-0 shadow-md shadow-garnet-900/30"
                   >
                     <Send className="w-4 h-4" />
                   </button>
